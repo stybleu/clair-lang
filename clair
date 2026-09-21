@@ -1,0 +1,155 @@
+#!/data/data/com.termux/files/usr/bin/bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+
+if [ $# -lt 1 ]; then
+    echo "Clair - compilateur natif modulaire"
+    echo
+    echo "Usage :"
+    echo "  ./clair programme.clair"
+    echo "  ./clair programme.clair programme"
+    exit 1
+fi
+
+ORIGINAL_DIR="$PWD"
+SOURCE="$1"
+
+if [[ "$SOURCE" != /* ]]; then
+    SOURCE="$ORIGINAL_DIR/$SOURCE"
+fi
+
+if [ ! -f "$SOURCE" ]; then
+    echo "[Clair] Fichier introuvable : $SOURCE"
+    exit 1
+fi
+
+if [ $# -ge 2 ]; then
+    OUTPUT="$2"
+else
+    OUTPUT="$(basename "$SOURCE" .clair)"
+fi
+
+if [[ "$OUTPUT" != /* ]]; then
+    OUTPUT="$ORIGINAL_DIR/$OUTPUT"
+fi
+
+RAW="$ROOT/.clair_raw_$$.clair"
+OPT="$ROOT/.clair_opt_$$.clair"
+FUNC_C="$ROOT/.clair_func_$$.c"
+NATIVE_C="$ROOT/.clair_native_$$.c"
+NATIVE_BIN="$ROOT/.clair_native_bin_$$"
+
+cleanup() {
+    rm -f \
+        "$RAW" \
+        "$OPT" \
+        "$FUNC_C" \
+        "$NATIVE_C" \
+        "$NATIVE_BIN"
+}
+
+trap cleanup EXIT
+
+declare -A MODULES_CHARGES
+
+charger_fichier() {
+    local fichier="$1"
+
+    while IFS= read -r ligne || [ -n "$ligne" ]; do
+
+        if [[ "$ligne" =~ ^[[:space:]]*utilise[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*$ ]]; then
+
+            module="${BASH_REMATCH[1]}"
+            module_file="$ROOT/modules/$module.clair"
+
+            if [ ! -f "$module_file" ]; then
+                echo "[Clair] Module introuvable : $module"
+                exit 1
+            fi
+
+            if [ -z "${MODULES_CHARGES[$module]+x}" ]; then
+                MODULES_CHARGES[$module]=1
+                echo "[Clair] Module : $module"
+                charger_fichier "$module_file"
+            fi
+
+        else
+            printf '%s\n' "$ligne" >> "$RAW"
+        fi
+
+    done < "$fichier"
+}
+
+charger_fichier "$SOURCE"
+
+python \
+    "$ROOT/outils/optimise_plage.py" \
+    "$RAW" \
+    "$OPT"
+
+echo "[Clair] Optimisation plage()"
+echo "[Clair] Génération C"
+
+cd "$ROOT"
+
+"$ROOT/clairc" "$OPT" "$OUTPUT"
+
+CFILE="${OUTPUT}.c"
+
+if [ -f "$CFILE" ]; then
+
+    echo "[Clair] Analyse des fonctions numériques"
+
+    if python \
+        "$ROOT/outils/optimise_fonctions_c.py" \
+        "$CFILE" \
+        "$FUNC_C"; then
+
+        echo "[Clair] Analyse des types natifs"
+
+        if python \
+            "$ROOT/outils/optimise_numeriques_c.py" \
+            "$FUNC_C" \
+            "$NATIVE_C"; then
+
+            echo "[Clair] Compilation native -O3"
+
+            if clang \
+                -O3 \
+                -I "$ROOT" \
+                "$NATIVE_C" \
+                -lm \
+                -o "$NATIVE_BIN"; then
+
+                mv "$NATIVE_C" "$CFILE"
+                mv "$NATIVE_BIN" "$OUTPUT"
+
+                chmod +x "$OUTPUT"
+
+                echo \
+                    "[Clair] Optimisation native appliquée"
+            else
+                echo \
+                    "[Clair] Compilation native échouée"
+                echo \
+                    "[Clair] Version dynamique conservée"
+            fi
+
+        else
+            echo \
+                "[Clair] Analyse numérique impossible"
+            echo \
+                "[Clair] Version dynamique conservée"
+        fi
+
+    else
+        echo \
+            "[Clair] Spécialisation fonctions impossible"
+        echo \
+            "[Clair] Version dynamique conservée"
+    fi
+fi
+
+echo "[Clair] Exécutable : $OUTPUT"

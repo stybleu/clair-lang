@@ -1,0 +1,48 @@
+# Binaires compilés
+/clairc
+/demo
+/demo_modules
+/bench
+/bench_auto
+/bench_auto2
+/bench_native
+/bench_c
+/bench_decimal
+/bench_decimal_c
+/bench_fonction
+/bench_fonction_native
+/bench_fonction_decimal
+
+# C généré par Clair
+/bench.c
+/bench_native.c
+/bench_auto.c
+/bench_auto2.c
+/bench_decimal.c
+/bench_fonction.c
+/bench_fonction_native.c
+/bench_fonction_decimal.c
+/demo.c
+/demo_modules.c
+
+# Fichiers de test générés
+/clair_test.txt
+
+# Sauvegardes
+*.bak
+*.pre_plage_opt
+*_backup.py
+clair_avant_*
+clair.pre_plage_opt
+
+# Temporaires Clair
+.clair_*
+
+# Python
+__pycache__/
+*.pyc
+
+# Editeurs
+*~
+*.swp
+/bench_avant_entiers.c

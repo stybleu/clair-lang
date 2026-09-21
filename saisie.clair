@@ -1,0 +1,3 @@
+nom = demande("Ton nom ? ")
+age = demande_entier("Ton age ? ")
+ecris("Bonjour {nom}, age {age}")

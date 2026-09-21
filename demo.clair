@@ -1,0 +1,65 @@
+# Clair v5 - démonstration
+
+fixe VERSION = "5.0"
+nom = "Alice"
+age = 26
+
+ecris("Clair {VERSION} - Bonjour {nom}, tu as {age} ans")
+
+# Plage directe
+pour i dans 0..4:
+    ecris("i = {i}")
+
+# Selon / cas
+couleur = "vert"
+selon couleur:
+    cas "rouge":
+        ecris("Stop")
+    cas "vert":
+        ecris("Passe")
+    sinon:
+        ecris("Couleur inconnue")
+
+# Collections
+nombres = [10, 20, 30]
+nombres.ajoute(40)
+ecris("Liste :", nombres)
+
+infos = {
+    "nom": nom,
+    "age": age
+}
+ecris("Table :", infos)
+
+# Fonction + typage facultatif
+fn double(nombre: entier) -> entier:
+    retourne nombre * 2
+
+ecris("Double :", double(21))
+
+# Fichier avec fermeture automatique
+avec fichier = ouvre("clair_test.txt", "ecriture"):
+    fichier.ecris("Bonjour depuis Clair")
+
+contenu = lis_fichier("clair_test.txt")
+ecris("Fichier : {contenu}")
+
+# Erreurs
+tente:
+    erreur("Erreur volontaire")
+capture probleme:
+    ecris("Erreur capturée : {probleme}")
+toujours:
+    ecris("Toujours exécuté")
+
+# Appartenance avec "dans"
+si 20 dans nombres:
+    ecris("20 est dans la liste")
+
+# arrete / suivant
+pour j dans 0..6:
+    si j == 2:
+        suivant
+    si j == 5:
+        arrete
+    ecris("j = {j}")

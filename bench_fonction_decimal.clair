@@ -1,0 +1,9 @@
+fn calcule(a: decimal, b: decimal) -> decimal:
+    retourne (a + b) * 1.0000001
+
+x = 1.25
+
+pour i dans plage(10000000):
+    x = calcule(x, 0.000001)
+
+ecris(x)
