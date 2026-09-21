@@ -7,16 +7,9 @@ import sys
 HELPERS = r'''
 #include <string.h>
 
-typedef struct ClairStringStorage {
-    long long refs;
-    long long cap;
-    char data[];
-} ClairStringStorage;
-
 typedef struct {
     const char *data;
     long long len;
-    ClairStringStorage *storage;
 } ClairString;
 
 
@@ -25,7 +18,6 @@ static ClairString clair_string_literal(const char *s)
     ClairString r;
     r.data = s;
     r.len = (long long)strlen(s);
-    r.storage = NULL;
     return r;
 }
 
@@ -40,16 +32,7 @@ static ClairString clair_string_concat_many(
         total += parts[i].len;
     }
 
-    ClairStringStorage *storage = nv_xmalloc(
-        sizeof(ClairStringStorage)
-        + (size_t)total
-        + 1
-    );
-
-    storage->refs = 1;
-    storage->cap = total;
-
-    char *buffer = storage->data;
+    char *buffer = nv_xmalloc((size_t)total + 1);
 
     long long pos = 0;
 
@@ -70,7 +53,6 @@ static ClairString clair_string_concat_many(
     ClairString r;
     r.data = buffer;
     r.len = total;
-    r.storage = storage;
 
     return r;
 }
@@ -112,169 +94,8 @@ static ClairString clair_string_char(
 
     r.data = s.data + index;
     r.len = 1;
-    r.storage = NULL;
 
     return r;
-}
-
-
-static ClairString clair_string_copy(
-    ClairString s
-) {
-    if (s.storage) {
-        s.storage->refs++;
-    }
-
-    return s;
-}
-
-
-static void clair_string_release(
-    ClairString *s
-) {
-    if (!s) {
-        return;
-    }
-
-    if (s->storage) {
-        s->storage->refs--;
-
-        if (s->storage->refs == 0) {
-            free(s->storage);
-        }
-    }
-
-    s->data = "";
-    s->len = 0;
-    s->storage = NULL;
-}
-
-
-/*
- * L'expression src est évaluée avant l'appel.
- * C'est donc sûr pour :
- *
- *     texte = texte + "x"
- *
- * La concaténation lit d'abord l'ancien texte,
- * puis seulement l'ancien stockage est libéré.
- */
-static void clair_string_assign_concat_many(
-    ClairString *dst,
-    const ClairString *parts,
-    long long count
-) {
-    long long total = 0;
-    int aliases_dst = 0;
-
-    for (long long i = 0; i < count; ++i) {
-        total += parts[i].len;
-
-        if (
-            dst->storage
-            && parts[i].storage == dst->storage
-        ) {
-            aliases_dst = 1;
-        }
-    }
-
-    ClairStringStorage *target = NULL;
-    int reused = 0;
-
-    /*
-     * Cas idéal :
-     * le buffer appartient uniquement à dst et aucune
-     * partie de la concaténation ne dépend de celui-ci.
-     */
-    if (
-        dst->storage
-        && dst->storage->refs == 1
-        && !aliases_dst
-    ) {
-        target = dst->storage;
-
-        if (target->cap < total) {
-            long long new_cap = target->cap;
-
-            if (new_cap < 16) {
-                new_cap = 16;
-            }
-
-            while (new_cap < total) {
-                new_cap *= 2;
-            }
-
-            ClairStringStorage *p = realloc(
-                target,
-                sizeof(ClairStringStorage)
-                + (size_t)new_cap
-                + 1
-            );
-
-            if (!p) {
-                nv_throw("Mémoire insuffisante");
-            }
-
-            target = p;
-            target->cap = new_cap;
-        }
-
-        reused = 1;
-    }
-    else {
-        long long cap = total;
-
-        if (cap < 16) {
-            cap = 16;
-        }
-
-        target = nv_xmalloc(
-            sizeof(ClairStringStorage)
-            + (size_t)cap
-            + 1
-        );
-
-        target->refs = 1;
-        target->cap = cap;
-    }
-
-    long long pos = 0;
-
-    for (long long i = 0; i < count; ++i) {
-        if (parts[i].len > 0) {
-            memcpy(
-                target->data + pos,
-                parts[i].data,
-                (size_t)parts[i].len
-            );
-
-            pos += parts[i].len;
-        }
-    }
-
-    target->data[total] = '\0';
-
-    /*
-     * Si on a créé un nouveau stockage, l'ancien peut
-     * maintenant être relâché. On le fait après les copies
-     * pour préserver les éventuelles sources aliasées.
-     */
-    if (!reused) {
-        clair_string_release(dst);
-    }
-
-    dst->storage = target;
-    dst->data = target->data;
-    dst->len = total;
-}
-
-
-static void clair_string_assign_move(
-    ClairString *dst,
-    ClairString src
-) {
-    clair_string_release(dst);
-    *dst = src;
 }
 
 
@@ -732,27 +553,6 @@ def main():
             "spécialisable"
         )
 
-    main_start = None
-    main_end = None
-
-    for i, line in enumerate(lines):
-        if "int main(void){" in line:
-            main_start = i
-            break
-
-    if main_start is not None:
-        for i in range(main_start + 1, len(lines)):
-            if re.match(r'^\s*return 0;\s*$', lines[i]):
-                main_end = i
-                break
-
-    main_strings = []
-
-    if main_start is not None and main_end is not None:
-        for name, info in native.items():
-            if main_start < info["line"] < main_end:
-                main_strings.append(name)
-
     output = []
     helpers_inserted = False
 
@@ -776,22 +576,9 @@ def main():
 
         for name, info in native.items():
             if info["line"] == index:
-                code = info["code"]
-
-                if (
-                    re.fullmatch(
-                        r'[A-Za-z_][A-Za-z0-9_]*',
-                        code
-                    )
-                    and code in native
-                ):
-                    code = (
-                        f"clair_string_copy({code})"
-                    )
-
                 declaration = (
                     f"ClairString {name} = "
-                    f"{code};\n"
+                    f"{info['code']};\n"
                 )
                 break
 
@@ -800,68 +587,6 @@ def main():
             continue
 
         new_line = line
-
-        # Réaffectation d'une chaîne déjà native.
-        #
-        # Exemple :
-        #     texte = texte + "x"
-        #
-        # On calcule d'abord la nouvelle valeur puis
-        # clair_string_assign_move() libère l'ancienne.
-        for name in native:
-            m_assign = re.match(
-                rf'^(\s*){re.escape(name)}'
-                rf'\s*=\s*(.*?)\s*;\s*$',
-                new_line
-            )
-
-            if not m_assign:
-                continue
-
-            rhs = m_assign.group(2)
-            native_rhs = string_code(
-                rhs,
-                native
-            )
-
-            if native_rhs is None:
-                continue
-
-            if (
-                re.fullmatch(
-                    r'[A-Za-z_][A-Za-z0-9_]*',
-                    native_rhs
-                )
-                and native_rhs in native
-            ):
-                native_rhs = (
-                    f"clair_string_copy({native_rhs})"
-                )
-
-            indent = m_assign.group(1)
-
-            terms = string_terms(
-                rhs,
-                native
-            )
-
-            if terms is not None and len(terms) > 1:
-                new_line = (
-                    f"{indent}"
-                    f"clair_string_assign_concat_many("
-                    f"&{name}, "
-                    f"(ClairString[]){{"
-                    + ", ".join(terms)
-                    + f"}}, "
-                    f"{len(terms)}LL);\n"
-                )
-            else:
-                new_line = (
-                    f"{indent}clair_string_assign_move("
-                    f"&{name}, {native_rhs});\n"
-                )
-
-            break
 
         for name in native:
             new_line = replace_length(
@@ -891,17 +616,6 @@ def main():
                 ),
                 new_line
             )
-
-        if (
-            main_end is not None
-            and index == main_end
-            and main_strings
-        ):
-            for string_name in reversed(main_strings):
-                output.append(
-                    f"    clair_string_release("
-                    f"&{string_name});\n"
-                )
 
         output.append(new_line)
 

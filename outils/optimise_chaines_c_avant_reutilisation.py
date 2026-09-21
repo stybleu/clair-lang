@@ -9,7 +9,6 @@ HELPERS = r'''
 
 typedef struct ClairStringStorage {
     long long refs;
-    long long cap;
     char data[];
 } ClairStringStorage;
 
@@ -47,7 +46,6 @@ static ClairString clair_string_concat_many(
     );
 
     storage->refs = 1;
-    storage->cap = total;
 
     char *buffer = storage->data;
 
@@ -159,116 +157,6 @@ static void clair_string_release(
  * La concaténation lit d'abord l'ancien texte,
  * puis seulement l'ancien stockage est libéré.
  */
-static void clair_string_assign_concat_many(
-    ClairString *dst,
-    const ClairString *parts,
-    long long count
-) {
-    long long total = 0;
-    int aliases_dst = 0;
-
-    for (long long i = 0; i < count; ++i) {
-        total += parts[i].len;
-
-        if (
-            dst->storage
-            && parts[i].storage == dst->storage
-        ) {
-            aliases_dst = 1;
-        }
-    }
-
-    ClairStringStorage *target = NULL;
-    int reused = 0;
-
-    /*
-     * Cas idéal :
-     * le buffer appartient uniquement à dst et aucune
-     * partie de la concaténation ne dépend de celui-ci.
-     */
-    if (
-        dst->storage
-        && dst->storage->refs == 1
-        && !aliases_dst
-    ) {
-        target = dst->storage;
-
-        if (target->cap < total) {
-            long long new_cap = target->cap;
-
-            if (new_cap < 16) {
-                new_cap = 16;
-            }
-
-            while (new_cap < total) {
-                new_cap *= 2;
-            }
-
-            ClairStringStorage *p = realloc(
-                target,
-                sizeof(ClairStringStorage)
-                + (size_t)new_cap
-                + 1
-            );
-
-            if (!p) {
-                nv_throw("Mémoire insuffisante");
-            }
-
-            target = p;
-            target->cap = new_cap;
-        }
-
-        reused = 1;
-    }
-    else {
-        long long cap = total;
-
-        if (cap < 16) {
-            cap = 16;
-        }
-
-        target = nv_xmalloc(
-            sizeof(ClairStringStorage)
-            + (size_t)cap
-            + 1
-        );
-
-        target->refs = 1;
-        target->cap = cap;
-    }
-
-    long long pos = 0;
-
-    for (long long i = 0; i < count; ++i) {
-        if (parts[i].len > 0) {
-            memcpy(
-                target->data + pos,
-                parts[i].data,
-                (size_t)parts[i].len
-            );
-
-            pos += parts[i].len;
-        }
-    }
-
-    target->data[total] = '\0';
-
-    /*
-     * Si on a créé un nouveau stockage, l'ancien peut
-     * maintenant être relâché. On le fait après les copies
-     * pour préserver les éventuelles sources aliasées.
-     */
-    if (!reused) {
-        clair_string_release(dst);
-    }
-
-    dst->storage = target;
-    dst->data = target->data;
-    dst->len = total;
-}
-
-
 static void clair_string_assign_move(
     ClairString *dst,
     ClairString src
@@ -840,26 +728,10 @@ def main():
 
             indent = m_assign.group(1)
 
-            terms = string_terms(
-                rhs,
-                native
+            new_line = (
+                f"{indent}clair_string_assign_move("
+                f"&{name}, {native_rhs});\n"
             )
-
-            if terms is not None and len(terms) > 1:
-                new_line = (
-                    f"{indent}"
-                    f"clair_string_assign_concat_many("
-                    f"&{name}, "
-                    f"(ClairString[]){{"
-                    + ", ".join(terms)
-                    + f"}}, "
-                    f"{len(terms)}LL);\n"
-                )
-            else:
-                new_line = (
-                    f"{indent}clair_string_assign_move("
-                    f"&{name}, {native_rhs});\n"
-                )
 
             break
 
