@@ -1,0 +1,15 @@
+fn addition(a, b):
+    retourne a + b
+
+entier_resultat = 0
+decimal_resultat = 0.0
+mixte_resultat = 0.0
+
+pour i dans plage(10000000):
+    entier_resultat = addition(entier_resultat, 1)
+    decimal_resultat = addition(decimal_resultat, 0.000001)
+    mixte_resultat = addition(i, 0.5)
+
+ecris(entier_resultat)
+ecris(decimal_resultat)
+ecris(mixte_resultat)

@@ -325,35 +325,6 @@ def main():
         if m:
             types.setdefault(m.group(1), "double")
 
-    # Inférence des déclarations numériques plus complexes.
-    # Exemple après spécialisation d'une fonction :
-    # NvVal r = nv_add(nv_int(10), nv_float(2.5));
-    changed = True
-
-    while changed:
-        changed = False
-
-        for line in body:
-            m = re.match(
-                r'\s*NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
-                r'\s*=\s*(.+);\s*$',
-                line
-            )
-
-            if not m:
-                continue
-
-            name, rhs = m.groups()
-
-            if name in types:
-                continue
-
-            converted = convert_expr(rhs, types)
-
-            if converted is not None:
-                types[name] = converted[1]
-                changed = True
-
     # Variables avec affectation non numérique :
     # elles restent dynamiques.
     unsafe = set()
@@ -394,31 +365,6 @@ def main():
     output = []
 
     for line in lines:
-        # Déclaration numérique générique :
-        # NvVal x = <expression numérique>;
-        m = re.match(
-            r'(\s*)NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
-            r'\s*=\s*(.+);\s*$',
-            line
-        )
-
-        if m and m.group(2) in types:
-            indent, name, rhs = m.groups()
-            converted = convert_expr(rhs, types)
-
-            if converted is not None:
-                ctype = (
-                    "double"
-                    if types[name] == "double"
-                    else "long long"
-                )
-
-                output.append(
-                    f"{indent}{ctype} {name} = "
-                    f"{converted[0]};\n"
-                )
-                continue
-
         # NvVal x = nv_int(...)
         m = re.match(
             r'(\s*)NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'

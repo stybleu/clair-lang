@@ -1,0 +1,15 @@
+def addition(a, b):
+    return a + b
+
+entier_resultat = 0
+decimal_resultat = 0.0
+mixte_resultat = 0.0
+
+for i in range(10000000):
+    entier_resultat = addition(entier_resultat, 1)
+    decimal_resultat = addition(decimal_resultat, 0.000001)
+    mixte_resultat = addition(i, 0.5)
+
+print(entier_resultat)
+print(decimal_resultat)
+print(mixte_resultat)

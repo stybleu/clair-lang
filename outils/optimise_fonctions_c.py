@@ -4,10 +4,193 @@ import re
 import sys
 
 
-SUPPORTED_TYPES = {
-    "entier",
-    "decimal",
-}
+NUMERIC_TYPES = {"entier", "decimal"}
+
+
+def strip_outer_parens(expr):
+    expr = expr.strip()
+
+    while expr.startswith("(") and expr.endswith(")"):
+        depth = 0
+        wraps = True
+
+        for i, ch in enumerate(expr):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+
+                if depth < 0:
+                    wraps = False
+                    break
+
+                if depth == 0 and i != len(expr) - 1:
+                    wraps = False
+                    break
+
+        if not wraps or depth != 0:
+            break
+
+        expr = expr[1:-1].strip()
+
+    return expr
+
+
+def split_args(text):
+    args = []
+    current = []
+    depth = 0
+
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+
+        if ch == "," and depth == 0:
+            args.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+
+    if current:
+        args.append("".join(current).strip())
+
+    return args
+
+
+def unwrap(expr, name):
+    expr = strip_outer_parens(expr)
+    prefix = name + "("
+
+    if not expr.startswith(prefix) or not expr.endswith(")"):
+        return None
+
+    return expr[len(prefix):-1]
+
+
+def promote(a, b):
+    if a == "decimal" or b == "decimal":
+        return "decimal"
+    return "entier"
+
+
+def infer_expr_type(expr, symbols):
+    expr = strip_outer_parens(expr)
+
+    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', expr):
+        return symbols.get(expr)
+
+    if re.fullmatch(r'-?\d+(?:LL)?', expr):
+        return "entier"
+
+    if re.fullmatch(
+        r'-?(?:\d+\.\d*|\d*\.\d+)'
+        r'(?:[eE][+-]?\d+)?',
+        expr
+    ):
+        return "decimal"
+
+    inner = unwrap(expr, "nv_int")
+    if inner is not None:
+        return "entier"
+
+    inner = unwrap(expr, "nv_float")
+    if inner is not None:
+        return "decimal"
+
+    inner = unwrap(expr, "nv_neg")
+    if inner is not None:
+        return infer_expr_type(inner, symbols)
+
+    for fn in ("nv_add", "nv_sub", "nv_mul"):
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        a = infer_expr_type(args[0], symbols)
+        b = infer_expr_type(args[1], symbols)
+
+        if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
+            return None
+
+        return promote(a, b)
+
+    inner = unwrap(expr, "nv_div")
+    if inner is not None:
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        a = infer_expr_type(args[0], symbols)
+        b = infer_expr_type(args[1], symbols)
+
+        if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
+            return None
+
+        return "decimal"
+
+    inner = unwrap(expr, "nv_mod")
+    if inner is not None:
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        a = infer_expr_type(args[0], symbols)
+        b = infer_expr_type(args[1], symbols)
+
+        if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
+            return None
+
+        return "entier"
+
+    inner = unwrap(expr, "nv_pow")
+    if inner is not None:
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        a = infer_expr_type(args[0], symbols)
+        b = infer_expr_type(args[1], symbols)
+
+        if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
+            return None
+
+        return "decimal"
+
+    for fn in (
+        "nv_lt", "nv_le",
+        "nv_gt", "nv_ge",
+        "nv_eq", "nv_ne"
+    ):
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        a = infer_expr_type(args[0], symbols)
+        b = infer_expr_type(args[1], symbols)
+
+        if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
+            return None
+
+        return "entier"
+
+    return None
 
 
 def replace_identifier(expr, name, value):
@@ -20,7 +203,6 @@ def replace_identifier(expr, name, value):
 
 def parse_functions(lines):
     functions = {}
-
     i = 0
 
     while i < len(lines):
@@ -47,12 +229,8 @@ def parse_functions(lines):
             body.append(lines[j])
             j += 1
 
-        if j >= len(lines):
-            i += 1
-            continue
-
         params = []
-        types = {}
+        explicit_types = {}
         return_expr = None
         safe = True
 
@@ -88,7 +266,7 @@ def parse_functions(lines):
             )
 
             if tm:
-                types[tm.group(1)] = tm.group(2)
+                explicit_types[tm.group(1)] = tm.group(2)
                 continue
 
             rm = re.match(
@@ -109,21 +287,18 @@ def parse_functions(lines):
                 return_expr = expr
                 continue
 
-            # Toute autre instruction rend la fonction
-            # trop complexe pour cette première optimisation.
             safe = False
             break
 
-        if safe and return_expr and all(params):
-            for param in params:
-                if types.get(param) not in SUPPORTED_TYPES:
-                    safe = False
-                    break
-
-        if safe:
+        if (
+            safe
+            and return_expr is not None
+            and params
+            and all(params)
+        ):
             functions[name] = {
                 "params": params,
-                "types": types,
+                "explicit_types": explicit_types,
                 "expr": return_expr,
             }
 
@@ -132,11 +307,62 @@ def parse_functions(lines):
     return functions
 
 
+def infer_local_types(lines):
+    types = {}
+
+    # Littéraux directs
+    for line in lines:
+        m = re.match(
+            r'\s*NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*nv_int\(',
+            line
+        )
+
+        if m:
+            types[m.group(1)] = "entier"
+
+        m = re.match(
+            r'\s*NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*nv_float\(',
+            line
+        )
+
+        if m:
+            types[m.group(1)] = "decimal"
+
+    # Propagation simple : NvVal b = a;
+    changed = True
+
+    while changed:
+        changed = False
+
+        for line in lines:
+            m = re.match(
+                r'\s*NvVal\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*;',
+                line
+            )
+
+            if not m:
+                continue
+
+            dst, src = m.groups()
+
+            if src in types and dst not in types:
+                types[dst] = types[src]
+                changed = True
+
+    return types
+
+
 def find_call_chunks(line):
     marker = "({ NvCall __c = nv_call_new();"
     end_marker = "__r; })"
 
-    chunks = []
+    result = []
     pos = 0
 
     while True:
@@ -152,10 +378,10 @@ def find_call_chunks(line):
 
         end += len(end_marker)
 
-        chunks.append((start, end, line[start:end]))
+        result.append((start, end, line[start:end]))
         pos = end
 
-    return chunks
+    return result
 
 
 def extract_arguments(chunk):
@@ -165,7 +391,22 @@ def extract_arguments(chunk):
     )
 
 
-def inline_chunk(chunk, functions):
+def compatible(expected, actual):
+    if expected == "entier":
+        return actual == "entier"
+
+    if expected == "decimal":
+        return actual in ("entier", "decimal")
+
+    return False
+
+
+def inline_chunk(
+    chunk,
+    functions,
+    local_types,
+    specializations
+):
     dm = re.search(
         r'nv_dispatch_call\("'
         r'([A-Za-z_][A-Za-z0-9_]*)"\s*,',
@@ -186,11 +427,67 @@ def inline_chunk(chunk, functions):
     if len(args) != len(info["params"]):
         return None
 
+    arg_types = []
+
+    for arg in args:
+        typ = infer_expr_type(
+            arg.strip(),
+            local_types
+        )
+
+        if typ not in NUMERIC_TYPES:
+            return None
+
+        arg_types.append(typ)
+
+    # Respecte les annotations explicites lorsqu'elles existent.
+    for param, actual in zip(
+        info["params"],
+        arg_types
+    ):
+        expected = info["explicit_types"].get(param)
+
+        if expected is not None:
+            if not compatible(expected, actual):
+                return None
+
+    param_symbols = {}
+
+    for param, actual in zip(
+        info["params"],
+        arg_types
+    ):
+        expected = info["explicit_types"].get(param)
+
+        if expected == "decimal":
+            param_symbols[param] = "decimal"
+        elif expected == "entier":
+            param_symbols[param] = "entier"
+        else:
+            param_symbols[param] = actual
+
+    return_type = infer_expr_type(
+        info["expr"],
+        param_symbols
+    )
+
+    if return_type not in NUMERIC_TYPES:
+        return None
+
+    specializations.add(
+        (
+            name,
+            tuple(arg_types),
+            return_type
+        )
+    )
+
     expr = info["expr"]
 
-    # Remplacement paramètres -> arguments.
-    # Parenthèses ajoutées pour conserver les priorités.
-    for param, arg in zip(info["params"], args):
+    for param, arg in zip(
+        info["params"],
+        args
+    ):
         expr = replace_identifier(
             expr,
             param,
@@ -200,17 +497,23 @@ def inline_chunk(chunk, functions):
     return f"({expr})"
 
 
-def optimize_line(line, functions):
-    # Plusieurs appels peuvent exister sur une même ligne.
+def optimize_line(
+    line,
+    functions,
+    local_types,
+    specializations
+):
     while True:
         chunks = find_call_chunks(line)
 
-        replacement_done = False
+        changed = False
 
         for start, end, chunk in reversed(chunks):
             replacement = inline_chunk(
                 chunk,
-                functions
+                functions,
+                local_types,
+                specializations
             )
 
             if replacement is None:
@@ -222,9 +525,9 @@ def optimize_line(line, functions):
                 + line[end:]
             )
 
-            replacement_done = True
+            changed = True
 
-        if not replacement_done:
+        if not changed:
             break
 
     return line
@@ -238,45 +541,50 @@ def main():
         )
         sys.exit(2)
 
-    source = sys.argv[1]
-    destination = sys.argv[2]
+    source, destination = sys.argv[1], sys.argv[2]
 
     with open(source, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     functions = parse_functions(lines)
+    local_types = infer_local_types(lines)
 
-    if functions:
+    specializations = set()
+
+    output = [
+        optimize_line(
+            line,
+            functions,
+            local_types,
+            specializations
+        )
+        for line in lines
+    ]
+
+    if specializations:
         print(
-            "[Clair OPT] Fonctions numériques "
-            "spécialisables :"
+            "[Clair OPT] Spécialisations numériques :"
         )
 
-        for name, info in sorted(functions.items()):
-            signature = ", ".join(
-                f"{p}:{info['types'][p]}"
-                for p in info["params"]
-            )
+        for name, args, ret in sorted(
+            specializations
+        ):
+            signature = ", ".join(args)
 
             print(
-                f"  {name}({signature})"
+                f"  {name}({signature}) -> {ret}"
             )
     else:
         print(
-            "[Clair OPT] Aucune fonction numérique "
-            "spécialisable"
+            "[Clair OPT] Aucune fonction "
+            "numérique spécialisée"
         )
-
-    output = [
-        optimize_line(line, functions)
-        for line in lines
-    ]
 
     with open(destination, "w", encoding="utf-8") as f:
         f.writelines(output)
 
     print(
-        "[Clair OPT] Spécialisation fonctions : "
+        "[Clair OPT] Inférence fonctions : "
         f"{destination}"
     )
 
