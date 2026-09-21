@@ -1,0 +1,8 @@
+valeurs = [1.5, 2.5, 3.5, 4.5, 5.5]
+
+somme = 0.0
+
+for i in range(100000000):
+    somme = somme + valeurs[i % 5]
+
+print(somme)

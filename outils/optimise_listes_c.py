@@ -11,6 +11,13 @@ typedef struct {
     long long cap;
 } ClairIntList;
 
+typedef struct {
+    double *data;
+    long long len;
+    long long cap;
+} ClairDoubleList;
+
+
 static ClairIntList clair_int_list_make(
     const long long *src,
     long long len
@@ -27,6 +34,25 @@ static ClairIntList clair_int_list_make(
 
     return l;
 }
+
+
+static ClairDoubleList clair_double_list_make(
+    const double *src,
+    long long len
+) {
+    ClairDoubleList l;
+
+    l.len = len;
+    l.cap = len > 4 ? len : 4;
+    l.data = nv_xmalloc(sizeof(double) * l.cap);
+
+    for (long long i = 0; i < len; ++i) {
+        l.data[i] = src[i];
+    }
+
+    return l;
+}
+
 
 static void clair_int_list_append(
     ClairIntList *l,
@@ -50,6 +76,30 @@ static void clair_int_list_append(
     l->data[l->len++] = value;
 }
 
+
+static void clair_double_list_append(
+    ClairDoubleList *l,
+    double value
+) {
+    if (l->len >= l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 4;
+
+        double *p = realloc(
+            l->data,
+            sizeof(double) * l->cap
+        );
+
+        if (!p) {
+            nv_throw("Mémoire insuffisante");
+        }
+
+        l->data = p;
+    }
+
+    l->data[l->len++] = value;
+}
+
+
 static long long clair_int_list_get(
     ClairIntList *l,
     long long index
@@ -65,6 +115,23 @@ static long long clair_int_list_get(
     return l->data[index];
 }
 
+
+static double clair_double_list_get(
+    ClairDoubleList *l,
+    long long index
+) {
+    if (index < 0) {
+        index = l->len + index;
+    }
+
+    if (index < 0 || index >= l->len) {
+        nv_throw("Indice de liste hors limites");
+    }
+
+    return l->data[index];
+}
+
+
 static NvVal clair_int_list_box(
     const ClairIntList *l
 ) {
@@ -76,127 +143,20 @@ static NvVal clair_int_list_box(
 
     return v;
 }
+
+
+static NvVal clair_double_list_box(
+    const ClairDoubleList *l
+) {
+    NvVal v = nv_list_new();
+
+    for (long long i = 0; i < l->len; ++i) {
+        nv_list_append(v, nv_float(l->data[i]));
+    }
+
+    return v;
+}
 '''
-
-
-def discover_lists(lines):
-    result = {}
-
-    pattern = re.compile(
-        r'^\s*NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
-        r'\s*=\s*\(\{\s*NvVal __l = nv_list_new\(\);'
-        r'(.*?)'
-        r'__l;\s*\}\);\s*$'
-    )
-
-    for index, line in enumerate(lines):
-        m = pattern.match(line)
-
-        if not m:
-            continue
-
-        name = m.group(1)
-        body = m.group(2)
-
-        all_appends = re.findall(
-            r'nv_list_append\(__l,\s*(.*?)\);',
-            body
-        )
-
-        int_appends = re.findall(
-            r'nv_list_append\(__l,\s*nv_int\((.*?)\)\);',
-            body
-        )
-
-        if not all_appends:
-            continue
-
-        # Seulement une liste 100 % entière.
-        if len(all_appends) != len(int_appends):
-            continue
-
-        result[name] = {
-            "line": index,
-            "items": int_appends,
-        }
-
-    return result
-
-
-def is_safe(name, declaration_line, lines):
-    word = re.compile(rf'\b{re.escape(name)}\b')
-
-    for index, line in enumerate(lines):
-        if index == declaration_line:
-            continue
-
-        if not word.search(line):
-            continue
-
-        # Lecture par index.
-        if f"nv_get_index({name}," in line:
-            converted_line = replace_indexes(line, name)
-
-            if f"nv_get_index({name}," in converted_line:
-                return False
-
-            continue
-
-        # Ajout entier.
-        if (
-            f'nv_dispatch_method({name}, "ajoute"' in line
-        ):
-            args = re.findall(
-                r'nv_call_add\(&__c,\s*(.*?)\);',
-                line
-            )
-
-            if len(args) != 1:
-                return False
-
-            if not args[0].strip().startswith("nv_int("):
-                return False
-
-            continue
-
-        # longueur(liste)
-        if (
-            'nv_dispatch_call("longueur"' in line
-            and f"nv_call_add(&__c, {name})" in line
-        ):
-            continue
-
-        # ecris(..., liste)
-        if (
-            'nv_dispatch_call("ecris"' in line
-            and f"nv_call_add(&__c, {name})" in line
-        ):
-            continue
-
-        # Toute autre utilisation reste dynamique.
-        return False
-
-    return True
-
-
-def replace_length(line, name):
-    pattern = re.compile(
-        r'\(\{\s*'
-        r'NvCall __c = nv_call_new\(\);\s*'
-        rf'nv_call_add\(&__c,\s*{re.escape(name)}\);\s*'
-        r'NvVal __r = nv_dispatch_call\('
-        r'"longueur",\s*'
-        r'__c\.args,\s*__c\.argc,\s*__c\.kw'
-        r'\);\s*'
-        r'nv_call_free\(&__c\);\s*'
-        r'__r;\s*'
-        r'\}\)'
-    )
-
-    return pattern.sub(
-        f'nv_int((long long){name}.len)',
-        line
-    )
 
 
 def strip_outer_parens(expr):
@@ -209,6 +169,7 @@ def strip_outer_parens(expr):
         for i, ch in enumerate(expr):
             if ch == "(":
                 depth += 1
+
             elif ch == ")":
                 depth -= 1
 
@@ -232,21 +193,25 @@ def split_top_args(text):
     for ch in text:
         if ch == "(":
             depth += 1
+
         elif ch == ")":
             depth -= 1
 
         if ch == "," and depth == 0:
             args.append("".join(current).strip())
             current = []
+
         else:
             current.append(ch)
 
     args.append("".join(current).strip())
+
     return args
 
 
 def unwrap(expr, name):
     expr = strip_outer_parens(expr)
+
     prefix = name + "("
 
     if not expr.startswith(prefix) or not expr.endswith(")"):
@@ -258,26 +223,19 @@ def unwrap(expr, name):
 def convert_index_expr(expr):
     expr = strip_outer_parens(expr)
 
-    # Variable native future : i, index, etc.
-    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', expr):
+    if re.fullmatch(
+        r'[A-Za-z_][A-Za-z0-9_]*',
+        expr
+    ):
         return expr
 
-    # Littéral entier.
     if re.fullmatch(r'-?\d+(?:LL)?', expr):
         return expr
 
     inner = unwrap(expr, "nv_int")
+
     if inner is not None:
         return convert_index_expr(inner)
-
-    inner = unwrap(expr, "nv_float")
-    if inner is not None:
-        value = convert_index_expr(inner)
-
-        if value is not None:
-            return f"((double)({value}))"
-
-        return None
 
     operations = {
         "nv_add": "+",
@@ -305,6 +263,7 @@ def convert_index_expr(expr):
         return f"(({a}) {op} ({b}))"
 
     inner = unwrap(expr, "nv_mod")
+
     if inner is not None:
         args = split_top_args(inner)
 
@@ -322,25 +281,8 @@ def convert_index_expr(expr):
             f"(long long)({b}))"
         )
 
-    inner = unwrap(expr, "nv_div")
-    if inner is not None:
-        args = split_top_args(inner)
-
-        if len(args) != 2:
-            return None
-
-        a = convert_index_expr(args[0])
-        b = convert_index_expr(args[1])
-
-        if a is None or b is None:
-            return None
-
-        return (
-            f"((double)({a}) / "
-            f"(double)({b}))"
-        )
-
     inner = unwrap(expr, "nv_neg")
+
     if inner is not None:
         value = convert_index_expr(inner)
 
@@ -350,8 +292,90 @@ def convert_index_expr(expr):
     return None
 
 
-def replace_indexes(line, name):
+def numeric_value(expr):
+    expr = expr.strip()
+
+    inner = unwrap(expr, "nv_int")
+
+    if inner is not None:
+        return "int", inner.strip()
+
+    inner = unwrap(expr, "nv_float")
+
+    if inner is not None:
+        return "double", inner.strip()
+
+    return None
+
+
+def discover_lists(lines):
+    result = {}
+
+    pattern = re.compile(
+        r'^\s*NvVal\s+'
+        r'([A-Za-z_][A-Za-z0-9_]*)'
+        r'\s*=\s*\(\{\s*'
+        r'NvVal __l = nv_list_new\(\);'
+        r'(.*?)'
+        r'__l;\s*\}\);\s*$'
+    )
+
+    for index, line in enumerate(lines):
+        m = pattern.match(line)
+
+        if not m:
+            continue
+
+        name = m.group(1)
+        body = m.group(2)
+
+        appends = re.findall(
+            r'nv_list_append\(__l,\s*(.*?)\);',
+            body
+        )
+
+        if not appends:
+            continue
+
+        values = []
+        has_double = False
+        valid = True
+
+        for expr in appends:
+            parsed = numeric_value(expr)
+
+            if parsed is None:
+                valid = False
+                break
+
+            typ, value = parsed
+
+            if typ == "double":
+                has_double = True
+
+            values.append((typ, value))
+
+        if not valid:
+            continue
+
+        list_type = (
+            "double"
+            if has_double
+            else "int"
+        )
+
+        result[name] = {
+            "line": index,
+            "items": values,
+            "type": list_type,
+        }
+
+    return result
+
+
+def replace_indexes(line, name, list_type):
     marker = f"nv_get_index({name},"
+
     pos = 0
 
     while True:
@@ -361,6 +385,7 @@ def replace_indexes(line, name):
             break
 
         open_pos = line.find("(", start)
+
         depth = 0
         end = None
 
@@ -369,6 +394,7 @@ def replace_indexes(line, name):
 
             if ch == "(":
                 depth += 1
+
             elif ch == ")":
                 depth -= 1
 
@@ -382,7 +408,11 @@ def replace_indexes(line, name):
         inner = line[open_pos + 1:end]
         args = split_top_args(inner)
 
-        if len(args) != 2 or args[0].strip() != name:
+        if len(args) != 2:
+            pos = end + 1
+            continue
+
+        if args[0].strip() != name:
             pos = end + 1
             continue
 
@@ -392,11 +422,19 @@ def replace_indexes(line, name):
             pos = end + 1
             continue
 
-        replacement = (
-            f"nv_int(clair_int_list_get("
-            f"&{name}, "
-            f"(long long)({native_index})))"
-        )
+        if list_type == "int":
+            replacement = (
+                f"nv_int(clair_int_list_get("
+                f"&{name}, "
+                f"(long long)({native_index})))"
+            )
+
+        else:
+            replacement = (
+                f"nv_float(clair_double_list_get("
+                f"&{name}, "
+                f"(long long)({native_index})))"
+            )
 
         line = (
             line[:start]
@@ -409,24 +447,135 @@ def replace_indexes(line, name):
     return line
 
 
-def replace_append(line, name):
-    if f'nv_dispatch_method({name}, "ajoute"' not in line:
-        return None
-
-    m = re.search(
-        r'nv_call_add\(&__c,\s*nv_int\((.*?)\)\);',
+def append_value(line):
+    matches = re.findall(
+        r'nv_call_add\(&__c,\s*(.*?)\);',
         line
     )
 
-    if not m:
+    if len(matches) != 1:
         return None
 
-    indent = re.match(r'^(\s*)', line).group(1)
-    value = m.group(1)
+    return numeric_value(matches[0])
+
+
+def is_safe(name, info, lines):
+    word = re.compile(
+        rf'\b{re.escape(name)}\b'
+    )
+
+    for index, line in enumerate(lines):
+        if index == info["line"]:
+            continue
+
+        if not word.search(line):
+            continue
+
+        if f"nv_get_index({name}," in line:
+            converted = replace_indexes(
+                line,
+                name,
+                info["type"]
+            )
+
+            if f"nv_get_index({name}," in converted:
+                return False
+
+            continue
+
+        if (
+            f'nv_dispatch_method({name}, "ajoute"'
+            in line
+        ):
+            value = append_value(line)
+
+            if value is None:
+                return False
+
+            typ, _ = value
+
+            if info["type"] == "int":
+                if typ != "int":
+                    return False
+
+            else:
+                if typ not in ("int", "double"):
+                    return False
+
+            continue
+
+        if (
+            'nv_dispatch_call("longueur"' in line
+            and f"nv_call_add(&__c, {name})"
+            in line
+        ):
+            continue
+
+        if (
+            'nv_dispatch_call("ecris"' in line
+            and f"nv_call_add(&__c, {name})"
+            in line
+        ):
+            continue
+
+        return False
+
+    return True
+
+
+def replace_length(line, name):
+    pattern = re.compile(
+        r'\(\{\s*'
+        r'NvCall __c = nv_call_new\(\);\s*'
+        rf'nv_call_add\(&__c,\s*'
+        rf'{re.escape(name)}\);\s*'
+        r'NvVal __r = nv_dispatch_call\('
+        r'"longueur",\s*'
+        r'__c\.args,\s*'
+        r'__c\.argc,\s*'
+        r'__c\.kw'
+        r'\);\s*'
+        r'nv_call_free\(&__c\);\s*'
+        r'__r;\s*'
+        r'\}\)'
+    )
+
+    return pattern.sub(
+        f'nv_int((long long){name}.len)',
+        line
+    )
+
+
+def replace_append(line, name, list_type):
+    if (
+        f'nv_dispatch_method({name}, "ajoute"'
+        not in line
+    ):
+        return None
+
+    value = append_value(line)
+
+    if value is None:
+        return None
+
+    typ, expr = value
+
+    indent = re.match(
+        r'^(\s*)',
+        line
+    ).group(1)
+
+    if list_type == "int":
+        return (
+            f'{indent}clair_int_list_append('
+            f'&{name}, '
+            f'(long long)({expr}));\n'
+        )
 
     return (
-        f'{indent}clair_int_list_append('
-        f'&{name}, (long long)({value}));\n'
+        f'{indent}clair_double_list_append('
+        f'&{name}, '
+        f'(double)({expr}));\n'
     )
 
 
@@ -436,11 +585,16 @@ def main():
             "Usage: optimise_listes_c.py "
             "entree.c sortie.c"
         )
+
         sys.exit(2)
 
     source, destination = sys.argv[1], sys.argv[2]
 
-    with open(source, "r", encoding="utf-8") as f:
+    with open(
+        source,
+        "r",
+        encoding="utf-8"
+    ) as f:
         lines = f.readlines()
 
     candidates = discover_lists(lines)
@@ -448,42 +602,56 @@ def main():
     native = {}
 
     for name, info in candidates.items():
-        if is_safe(name, info["line"], lines):
+        if is_safe(name, info, lines):
             native[name] = info
 
     if native:
-        print("[Clair OPT] Listes entières natives :")
+        print("[Clair OPT] Listes numériques natives :")
 
         for name in sorted(native):
-            print(f"  {name}")
+            typ = native[name]["type"]
+
+            print(
+                f"  {name} -> "
+                f"{'entier' if typ == 'int' else 'decimal'}"
+            )
+
     else:
         print(
-            "[Clair OPT] Aucune liste entière "
+            "[Clair OPT] Aucune liste numérique "
             "spécialisable"
         )
 
     output = []
-
     helpers_inserted = False
 
     for index, line in enumerate(lines):
-        # Injecte le runtime spécialisé juste après l'include.
+
         if (
             not helpers_inserted
             and native
-            and line.startswith('#include "clair_runtime.h"')
+            and line.startswith(
+                '#include "clair_runtime.h"'
+            )
         ):
             output.append(line)
             output.append(HELPERS)
             output.append("\n")
+
             helpers_inserted = True
             continue
 
         declaration_done = False
 
         for name, info in native.items():
-            if index == info["line"]:
-                values = ", ".join(info["items"])
+            if index != info["line"]:
+                continue
+
+            if info["type"] == "int":
+                values = ", ".join(
+                    value
+                    for _, value in info["items"]
+                )
 
                 output.append(
                     f'ClairIntList {name} = '
@@ -492,36 +660,81 @@ def main():
                     f'{len(info["items"])}LL);\n'
                 )
 
-                declaration_done = True
-                break
+            else:
+                values = []
+
+                for typ, value in info["items"]:
+                    if typ == "int":
+                        values.append(
+                            f'(double)({value})'
+                        )
+                    else:
+                        values.append(value)
+
+                output.append(
+                    f'ClairDoubleList {name} = '
+                    f'clair_double_list_make('
+                    f'(double[]){{'
+                    f'{", ".join(values)}'
+                    f'}}, '
+                    f'{len(info["items"])}LL);\n'
+                )
+
+            declaration_done = True
+            break
 
         if declaration_done:
             continue
 
         new_line = line
 
-        for name in native:
-            append_line = replace_append(new_line, name)
+        for name, info in native.items():
+
+            append_line = replace_append(
+                new_line,
+                name,
+                info["type"]
+            )
 
             if append_line is not None:
                 new_line = append_line
                 break
 
-            new_line = replace_length(new_line, name)
-            new_line = replace_indexes(new_line, name)
+            new_line = replace_length(
+                new_line,
+                name
+            )
 
-            # Passage vers ecris() : box uniquement à la frontière.
+            new_line = replace_indexes(
+                new_line,
+                name,
+                info["type"]
+            )
+
+            if info["type"] == "int":
+                boxing = (
+                    f'clair_int_list_box(&{name})'
+                )
+
+            else:
+                boxing = (
+                    f'clair_double_list_box(&{name})'
+                )
+
             new_line = re.sub(
                 rf'nv_call_add\(&__c,\s*'
                 rf'{re.escape(name)}\)',
-                f'nv_call_add(&__c, '
-                f'clair_int_list_box(&{name}))',
+                f'nv_call_add(&__c, {boxing})',
                 new_line
             )
 
         output.append(new_line)
 
-    with open(destination, "w", encoding="utf-8") as f:
+    with open(
+        destination,
+        "w",
+        encoding="utf-8"
+    ) as f:
         f.writelines(output)
 
     print(

@@ -90,6 +90,13 @@ def convert_expr(expr, types):
     ):
         return expr, "double"
 
+    # Lecture d'une liste native de décimaux.
+    if (
+        expr.startswith("clair_double_list_get(")
+        and expr.endswith(")")
+    ):
+        return expr, "double"
+
     # Lecture d'une liste native d'entiers.
     if (
         expr.startswith("clair_int_list_get(")
