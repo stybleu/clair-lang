@@ -90,20 +90,6 @@ def convert_expr(expr, types):
     ):
         return expr, "double"
 
-    # Lecture d'une liste native d'entiers.
-    if (
-        expr.startswith("clair_int_list_get(")
-        and expr.endswith(")")
-    ):
-        return expr, "int"
-
-    # Longueur d'une liste native.
-    if re.fullmatch(
-        r'[A-Za-z_][A-Za-z0-9_]*\\.len',
-        expr
-    ):
-        return expr, "int"
-
     # nv_int(...)
     inner = unwrap(expr, "nv_int")
     if inner is not None:

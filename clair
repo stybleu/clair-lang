@@ -38,6 +38,7 @@ fi
 RAW="$ROOT/.clair_raw_$$.clair"
 OPT="$ROOT/.clair_opt_$$.clair"
 FUNC_C="$ROOT/.clair_func_$$.c"
+LIST_C="$ROOT/.clair_list_$$.c"
 NATIVE_C="$ROOT/.clair_native_$$.c"
 NATIVE_BIN="$ROOT/.clair_native_bin_$$"
 
@@ -46,6 +47,7 @@ cleanup() {
         "$RAW" \
         "$OPT" \
         "$FUNC_C" \
+        "$LIST_C" \
         "$NATIVE_C" \
         "$NATIVE_BIN"
 }
@@ -107,11 +109,23 @@ if [ -f "$CFILE" ]; then
         "$CFILE" \
         "$FUNC_C"; then
 
+        echo "[Clair] Optimisation des listes homogènes"
+
+        NUMERIC_INPUT="$FUNC_C"
+
+        if python \
+            "$ROOT/outils/optimise_listes_c.py" \
+            "$FUNC_C" \
+            "$LIST_C"; then
+
+            NUMERIC_INPUT="$LIST_C"
+        fi
+
         echo "[Clair] Analyse des types natifs"
 
         if python \
             "$ROOT/outils/optimise_numeriques_c.py" \
-            "$FUNC_C" \
+            "$NUMERIC_INPUT" \
             "$NATIVE_C"; then
 
             echo "[Clair] Compilation native -O3"
