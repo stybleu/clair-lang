@@ -1,0 +1,9 @@
+nom = "Alice"
+cible = "Alice"
+compteur = 0
+
+for i in range(100000000):
+    if nom == cible:
+        compteur += 1
+
+print(compteur)

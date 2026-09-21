@@ -1,0 +1,8 @@
+nom = "Alice"
+compteur = 0
+
+pour i dans plage(100000000):
+    si nom == "Alice":
+        compteur = compteur + 1
+
+ecris(compteur)

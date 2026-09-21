@@ -39,6 +39,8 @@ RAW="$ROOT/.clair_raw_$$.clair"
 OPT="$ROOT/.clair_opt_$$.clair"
 FUNC_C="$ROOT/.clair_func_$$.c"
 LIST_C="$ROOT/.clair_list_$$.c"
+STRING_C="$ROOT/.clair_string_$$.c"
+LITERAL_C="$ROOT/.clair_literal_$$.c"
 NATIVE_C="$ROOT/.clair_native_$$.c"
 NATIVE_BIN="$ROOT/.clair_native_bin_$$"
 
@@ -48,6 +50,8 @@ cleanup() {
         "$OPT" \
         "$FUNC_C" \
         "$LIST_C" \
+        "$STRING_C" \
+        "$LITERAL_C" \
         "$NATIVE_C" \
         "$NATIVE_BIN"
 }
@@ -119,6 +123,30 @@ if [ -f "$CFILE" ]; then
             "$LIST_C"; then
 
             NUMERIC_INPUT="$LIST_C"
+        fi
+
+        echo "[Clair] Optimisation des chaînes"
+
+        if python \
+            "$ROOT/outils/optimise_chaines_c.py" \
+            "$NUMERIC_INPUT" \
+            "$STRING_C"; then
+
+            NUMERIC_INPUT="$STRING_C"
+        else
+            echo "[Clair] Optimisation chaînes ignorée"
+        fi
+
+        echo "[Clair] Mise en cache des littéraux"
+
+        if python \
+            "$ROOT/outils/optimise_litteraux_c.py" \
+            "$NUMERIC_INPUT" \
+            "$LITERAL_C"; then
+
+            NUMERIC_INPUT="$LITERAL_C"
+        else
+            echo "[Clair] Optimisation littéraux ignorée"
         fi
 
         echo "[Clair] Analyse des types natifs"
