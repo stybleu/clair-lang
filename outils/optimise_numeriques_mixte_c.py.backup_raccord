@@ -251,41 +251,22 @@ def replace_balanced(line, function, callback):
 
 def repair(lines):
     native_ints = set()
-    native_floats = set()
-    native_strings = set()
 
-    def discover_native_types(source_lines):
-        for line in source_lines:
-            m = re.match(
-                r'^\s*long long\s+'
-                r'([A-Za-z_][A-Za-z0-9_]*)\b',
-                line
-            )
-            if m:
-                native_ints.add(m.group(1))
+    for line in lines:
+        m = re.match(
+            r'^\s*long long\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)\b',
+            line
+        )
 
-            m = re.match(
-                r'^\s*double\s+'
-                r'([A-Za-z_][A-Za-z0-9_]*)\b',
-                line
-            )
-            if m:
-                native_floats.add(m.group(1))
+        if m:
+            native_ints.add(m.group(1))
 
-            m = re.match(
-                r'^\s*ClairString\s+'
-                r'([A-Za-z_][A-Za-z0-9_]*)\b',
-                line
-            )
-            if m:
-                native_strings.add(m.group(1))
-
-    discover_native_types(lines)
-
+    output = []
     changed = True
 
-    # Première phase :
-    # continuer l'abaissement numérique natif existant.
+    # Quelques passes permettent à une variable nouvellement
+    # convertie de devenir native pour les lignes suivantes.
     while changed:
         changed = False
         new_output = []
@@ -307,21 +288,17 @@ def repair(lines):
                     m.group(3),
                 )
 
-                # Les temporaires de "selon" doivent rester NvVal :
-                # ils sont utilisés ensuite par les comparaisons
-                # dynamiques du runtime.
-                if not name.startswith("__selon"):
-                    lowered = lower(rhs, known)
+                lowered = lower(rhs, known)
 
-                    if lowered and lowered[1] == "int":
-                        line = (
-                            f"{indent}long long {name} = "
-                            f"{lowered[0]};\n"
-                        )
+                if lowered and lowered[1] == "int":
+                    line = (
+                        f"{indent}long long {name} = "
+                        f"{lowered[0]};\n"
+                    )
 
-                        known.add(name)
-                        native_ints.add(name)
-                        changed = True
+                    known.add(name)
+                    native_ints.add(name)
+                    changed = True
 
             # if (nv_truth(expression numérique))
             def truth_callback(inner):
@@ -348,126 +325,8 @@ def repair(lines):
 
         lines = new_output
 
-    discover_native_types(lines)
+    return lines
 
-    def box_native(expr):
-        expr = strip_outer(expr)
-
-        if expr in native_strings:
-            return f"clair_string_box({expr})"
-
-        if expr in native_ints:
-            return f"nv_int({expr})"
-
-        if expr in native_floats:
-            return f"nv_float({expr})"
-
-        return None
-
-    output = []
-
-    # Deuxième phase :
-    # réparer les frontières natif -> NvVal.
-    for line in lines:
-
-        # Réparer une frontière natif -> NvVal même lorsqu'elle
-        # n'est pas au début de la ligne.
-        #
-        # Exemple généré par "selon" :
-        # { NvVal __selon1 = couleur;
-        def box_nvval_assignment(match):
-            target = match.group(1)
-            source = match.group(2)
-
-            boxed = box_native(source)
-
-            if boxed is None:
-                return match.group(0)
-
-            return f"NvVal {target} = {boxed};"
-
-        line = re.sub(
-            r'\bNvVal\s+'
-            r'([A-Za-z_][A-Za-z0-9_]*)'
-            r'\s*=\s*'
-            r'([A-Za-z_][A-Za-z0-9_]*)'
-            r'\s*;',
-            box_nvval_assignment,
-            line
-        )
-
-        # Exemple :
-        # NvVal __selon1 = couleur;
-        #
-        # devient :
-        # NvVal __selon1 = clair_string_box(couleur);
-        m = re.match(
-            r'^(\s*)NvVal\s+'
-            r'([A-Za-z_][A-Za-z0-9_]*)'
-            r'\s*=\s*'
-            r'([A-Za-z_][A-Za-z0-9_]*)'
-            r'\s*;\s*$',
-            line
-        )
-
-        if m:
-            indent = m.group(1)
-            target = m.group(2)
-            source = m.group(3)
-
-            boxed = box_native(source)
-
-            if boxed is not None:
-                line = (
-                    f"{indent}NvVal {target} = "
-                    f"{boxed};\n"
-                )
-
-        # nv_to_str(age)
-        # nv_to_str(nom)
-        def to_str_callback(inner):
-            boxed = box_native(inner)
-
-            if boxed is None:
-                return None
-
-            return f"nv_to_str({boxed})"
-
-        line = replace_balanced(
-            line,
-            "nv_to_str",
-            to_str_callback
-        )
-
-        # nv_dict_set_value(__d, "nom", nom)
-        def dict_set_callback(inner):
-            args = split_args(inner)
-
-            if len(args) != 3:
-                return None
-
-            boxed = box_native(args[2])
-
-            if boxed is None:
-                return None
-
-            return (
-                "nv_dict_set_value("
-                f"{args[0]}, "
-                f"{args[1]}, "
-                f"{boxed}"
-                ")"
-            )
-
-        line = replace_balanced(
-            line,
-            "nv_dict_set_value",
-            dict_set_callback
-        )
-
-        output.append(line)
-
-    return output
 
 def main():
     if len(sys.argv) != 3:
