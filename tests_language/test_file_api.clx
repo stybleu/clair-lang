@@ -1,0 +1,11 @@
+write_file("clariox_api_test.txt", "Alpha")
+
+with file = open("clariox_api_test.txt", "append"):
+    file.write("Beta")
+
+content = read_file("clariox_api_test.txt")
+print("Content:", content)
+
+file = open("clariox_api_test.txt", "read")
+print("Read:", file.read())
+file.close()

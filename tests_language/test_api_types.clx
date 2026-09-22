@@ -1,0 +1,11 @@
+fn twice(value: int) -> int:
+    return value * 2
+
+integer_value = int("42")
+float_value = float("2.5")
+text_value = str(integer_value)
+
+print("Int:", integer_value)
+print("Float:", float_value)
+print("Str:", text_value)
+print("Twice:", twice(21))

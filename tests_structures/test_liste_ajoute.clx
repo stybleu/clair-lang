@@ -1,7 +1,7 @@
 nombres = []
 
 for i in range(100000):
-    nombres.ajoute(i)
+    nombres.append(i)
 
 print("Longueur :", len(nombres))
 print("Premier :", nombres[0])

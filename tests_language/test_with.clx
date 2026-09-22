@@ -1,4 +1,4 @@
-with file = ouvre("clariox_with_test.txt", "ecriture"):
+with file = open("clariox_with_test.txt", "write"):
     file.write("Clariox")
 
 print("With OK")

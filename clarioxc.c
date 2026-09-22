@@ -771,7 +771,7 @@ static const char *RUNTIME_C =
 "static NvVal nv_eq(NvVal a,NvVal b){return nv_bool(nv_same(a,b));} static NvVal nv_ne(NvVal a,NvVal b){return nv_bool(!nv_same(a,b));}\n"
 "static NvVal nv_lt(NvVal a,NvVal b){return nv_bool(nv_num(a)<nv_num(b));} static NvVal nv_le(NvVal a,NvVal b){return nv_bool(nv_num(a)<=nv_num(b));} static NvVal nv_gt(NvVal a,NvVal b){return nv_bool(nv_num(a)>nv_num(b));} static NvVal nv_ge(NvVal a,NvVal b){return nv_bool(nv_num(a)>=nv_num(b));}\n"
 "static void nv_print_one(NvVal v){ switch(v.kind){case NV_NONE:printf(\"none\");break;case NV_INT:printf(\"%lld\",v.as.i);break;case NV_FLOAT:printf(\"%g\",v.as.f);break;case NV_BOOL:printf(\"%s\",v.as.b?\"true\":\"false\");break;case NV_STR:printf(\"%s\",v.as.s);break;case NV_LIST:printf(\"[\");for(int i=0;i<v.as.list->len;i++){if(i)printf(\", \");nv_print_one(v.as.list->items[i]);}printf(\"]\");break;case NV_DICT:printf(\"{\");for(int i=0;i<v.as.dict->len;i++){if(i)printf(\", \");printf(\"\\\"%s\\\": \",v.as.dict->keys[i]);nv_print_one(v.as.dict->vals[i]);}printf(\"}\");break;case NV_OBJ:printf(\"<%s>\",v.as.obj->type);break;case NV_FILE:printf(\"<fichier>\");break;} }\n"
-"static void nv_list_append(NvVal l,NvVal v){ if(l.kind!=NV_LIST)nv_throw(\"ajoute() nécessite une liste\"); NvList*p=l.as.list; if(p->len==p->cap){p->cap=p->cap?p->cap*2:8;p->items=realloc(p->items,sizeof(NvVal)*p->cap);} p->items[p->len++]=v;}\n"
+"static void nv_list_append(NvVal l,NvVal v){ if(l.kind!=NV_LIST)nv_throw(\"append() nécessite une liste\"); NvList*p=l.as.list; if(p->len==p->cap){p->cap=p->cap?p->cap*2:8;p->items=realloc(p->items,sizeof(NvVal)*p->cap);} p->items[p->len++]=v;}\n"
 "static NvVal nv_range(NvVal a,NvVal b){ long long x=(long long)nv_num(a), y=(long long)nv_num(b); NvVal l=nv_list_new(); if(x<=y){for(long long i=x;i<y;i++)nv_list_append(l,nv_int(i));}else{for(long long i=x;i>y;i--)nv_list_append(l,nv_int(i));} return l;}\n"
 "static void nv_file_close(NvVal v){ if(v.kind==NV_FILE && v.as.file) fclose(v.as.file); }\n"
 "static NvVal nv_file_read(NvVal v){ if(v.kind!=NV_FILE||!v.as.file)nv_throw(\"Fichier non ouvert\"); if(fseek(v.as.file,0,SEEK_END)!=0)nv_throw(\"Impossible de lire le fichier\"); long n=ftell(v.as.file); if(n<0)nv_throw(\"Impossible de lire le fichier\"); rewind(v.as.file); char *buf=nv_xmalloc((size_t)n+1); size_t got=fread(buf,1,(size_t)n,v.as.file); buf[got]='\\0'; NvVal r=nv_str(buf); free(buf); return r;}\n"
@@ -798,7 +798,7 @@ static const char *RUNTIME_C =
 "static void nv_dict_free_shallow(NvDict*d){if(!d)return;for(int i=0;i<d->len;i++)free(d->keys[i]);free(d->keys);free(d->vals);free(d);}\n"
 "static void nv_call_free(NvCall*c){if(!c)return;free(c->args);nv_dict_free_shallow(c->kw);c->args=NULL;c->kw=NULL;c->argc=0;c->cap=0;}\n"
 "static NvVal nv_arg(NvVal*args,int argc,NvDict*kw,int pos,const char*name){if(pos<argc)return args[pos];int i=nv_dict_find(kw,name);if(i>=0)return kw->vals[i];char buf[512];snprintf(buf,sizeof(buf),\"Argument manquant : %s\",name);nv_throw(buf);return nv_none();}\n"
-"static void nv_expect_type(NvVal v,const char*t,const char*name){int ok=0;if(strcmp(t,\"entier\")==0)ok=v.kind==NV_INT;else if(strcmp(t,\"decimal\")==0)ok=v.kind==NV_FLOAT||v.kind==NV_INT;else if(strcmp(t,\"texte\")==0)ok=v.kind==NV_STR;else if(strcmp(t,\"booleen\")==0)ok=v.kind==NV_BOOL;else if(strcmp(t,\"liste\")==0)ok=v.kind==NV_LIST;else if(strcmp(t,\"table\")==0)ok=v.kind==NV_DICT;else if(strcmp(t,\"objet\")==0)ok=v.kind==NV_OBJ;else if(strcmp(t,\"fichier\")==0)ok=v.kind==NV_FILE;else ok=1;if(!ok){char buf[512];snprintf(buf,sizeof(buf),\"Type incorrect pour %s : %s attendu\",name,t);nv_throw(buf);}}\n"
+"static void nv_expect_type(NvVal v,const char*t,const char*name){int ok=0;if(strcmp(t,\"int\")==0)ok=v.kind==NV_INT;else if(strcmp(t,\"float\")==0)ok=v.kind==NV_FLOAT||v.kind==NV_INT;else if(strcmp(t,\"str\")==0)ok=v.kind==NV_STR;else if(strcmp(t,\"bool\")==0)ok=v.kind==NV_BOOL;else if(strcmp(t,\"list\")==0)ok=v.kind==NV_LIST;else if(strcmp(t,\"dict\")==0)ok=v.kind==NV_DICT;else if(strcmp(t,\"object\")==0)ok=v.kind==NV_OBJ;else if(strcmp(t,\"file\")==0)ok=v.kind==NV_FILE;else ok=1;if(!ok){char buf[512];snprintf(buf,sizeof(buf),\"Type incorrect pour %s : %s attendu\",name,t);nv_throw(buf);}}\n"
 "static NvVal nv_dispatch_call(const char*,NvVal*,int,NvDict*);\n"
 "static NvVal nv_dispatch_method(NvVal,const char*,NvVal*,int,NvDict*);\n"
 "\n";
@@ -994,18 +994,18 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"\nstatic NvVal nv_builtin_print(NvVal *args,int argc){for(int i=0;i<argc;i++){if(i)printf(\" \");nv_print_one(args[i]);}printf(\"\\n\");return nv_none();}\n");
     fprintf(out,"static NvVal nv_dispatch_call(const char *name,NvVal *args,int argc,NvDict *kw){\n");
     fprintf(out,"    if(strcmp(name,\"print\")==0) return nv_builtin_print(args,argc);\n");
-    fprintf(out,"    if(strcmp(name,\"demande\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[4096]; if(!fgets(b,sizeof(b),stdin))return nv_str(\"\"); b[strcspn(b,\"\\r\\n\")]=0; return nv_str(b); }\n");
-    fprintf(out,"    if(strcmp(name,\"demande_entier\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_int(0); char *e=NULL; long long v=strtoll(b,&e,10); if(e==b)nv_throw(\"Un entier était attendu\"); return nv_int(v); }\n");
-    fprintf(out,"    if(strcmp(name,\"demande_decimal\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_float(0); char *e=NULL; double v=strtod(b,&e); if(e==b)nv_throw(\"Un nombre décimal était attendu\"); return nv_float(v); }\n");
-    fprintf(out,"    if(strcmp(name,\"entier\")==0){ if(argc<1)nv_throw(\"entier() attend une valeur\"); if(args[0].kind==NV_INT)return args[0]; if(args[0].kind==NV_STR)return nv_int(strtoll(args[0].as.s,NULL,10)); return nv_int((long long)nv_num(args[0])); }\n");
-    fprintf(out,"    if(strcmp(name,\"decimal\")==0){ if(argc<1)nv_throw(\"decimal() attend une valeur\"); if(args[0].kind==NV_STR)return nv_float(strtod(args[0].as.s,NULL)); return nv_float(nv_num(args[0])); }\n");
-    fprintf(out,"    if(strcmp(name,\"texte\")==0){ if(argc<1)nv_throw(\"texte() attend une valeur\"); return nv_to_str(args[0]); }\n");
-    fprintf(out,"    if(strcmp(name,\"ouvre\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"ouvre() attend un chemin texte\"); const char*m=\"r\"; if(argc>1&&args[1].kind==NV_STR){ if(strcmp(args[1].as.s,\"lecture\")==0)m=\"r\"; else if(strcmp(args[1].as.s,\"ecriture\")==0)m=\"w\"; else if(strcmp(args[1].as.s,\"ajout\")==0)m=\"a\"; else m=args[1].as.s;} FILE*f=fopen(args[0].as.s,m); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); return nv_file_value(f); }\n");
-    fprintf(out,"    if(strcmp(name,\"lis_fichier\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"lis_fichier() attend un chemin texte\"); FILE*f=fopen(args[0].as.s,\"r\"); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); NvVal fv=nv_file_value(f); NvVal r=nv_file_read(fv); fclose(f); return r; }\n");
-    fprintf(out,"    if(strcmp(name,\"ecris_fichier\")==0){ if(argc<2||args[0].kind!=NV_STR)nv_throw(\"ecris_fichier() attend un chemin et une valeur\"); FILE*f=fopen(args[0].as.s,\"w\"); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); NvVal fv=nv_file_value(f); nv_file_write(fv,args[1]); fclose(f); return nv_none(); }\n");
+    fprintf(out,"    if(strcmp(name,\"input\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[4096]; if(!fgets(b,sizeof(b),stdin))return nv_str(\"\"); b[strcspn(b,\"\\r\\n\")]=0; return nv_str(b); }\n");
+    fprintf(out,"    if(strcmp(name,\"input_int\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_int(0); char *e=NULL; long long v=strtoll(b,&e,10); if(e==b)nv_throw(\"Un entier était attendu\"); return nv_int(v); }\n");
+    fprintf(out,"    if(strcmp(name,\"input_float\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_float(0); char *e=NULL; double v=strtod(b,&e); if(e==b)nv_throw(\"Un nombre décimal était attendu\"); return nv_float(v); }\n");
+    fprintf(out,"    if(strcmp(name,\"int\")==0){ if(argc<1)nv_throw(\"int() attend une valeur\"); if(args[0].kind==NV_INT)return args[0]; if(args[0].kind==NV_STR)return nv_int(strtoll(args[0].as.s,NULL,10)); return nv_int((long long)nv_num(args[0])); }\n");
+    fprintf(out,"    if(strcmp(name,\"float\")==0){ if(argc<1)nv_throw(\"float() attend une valeur\"); if(args[0].kind==NV_STR)return nv_float(strtod(args[0].as.s,NULL)); return nv_float(nv_num(args[0])); }\n");
+    fprintf(out,"    if(strcmp(name,\"str\")==0){ if(argc<1)nv_throw(\"str() attend une valeur\"); return nv_to_str(args[0]); }\n");
+    fprintf(out,"    if(strcmp(name,\"open\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"open() attend un chemin texte\"); const char*m=\"r\"; if(argc>1&&args[1].kind==NV_STR){ if(strcmp(args[1].as.s,\"read\")==0)m=\"r\"; else if(strcmp(args[1].as.s,\"write\")==0)m=\"w\"; else if(strcmp(args[1].as.s,\"append\")==0)m=\"a\"; else m=args[1].as.s;} FILE*f=fopen(args[0].as.s,m); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); return nv_file_value(f); }\n");
+    fprintf(out,"    if(strcmp(name,\"read_file\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"read_file() attend un chemin texte\"); FILE*f=fopen(args[0].as.s,\"r\"); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); NvVal fv=nv_file_value(f); NvVal r=nv_file_read(fv); fclose(f); return r; }\n");
+    fprintf(out,"    if(strcmp(name,\"write_file\")==0){ if(argc<2||args[0].kind!=NV_STR)nv_throw(\"write_file() attend un chemin et une valeur\"); FILE*f=fopen(args[0].as.s,\"w\"); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); NvVal fv=nv_file_value(f); nv_file_write(fv,args[1]); fclose(f); return nv_none(); }\n");
     fprintf(out,"    if(strcmp(name,\"len\")==0){ if(argc<1)nv_throw(\"len() attend une valeur\"); return nv_int(nv_len(args[0])); }\n");
     fprintf(out,"    if(strcmp(name,\"range\")==0){ long long a=0,b=0,p=1; if(argc==1){b=(long long)nv_num(args[0]);} else if(argc>=2){a=(long long)nv_num(args[0]);b=(long long)nv_num(args[1]);if(argc>=3)p=(long long)nv_num(args[2]);} else nv_throw(\"range() attend 1 à 3 arguments\"); if(p==0)nv_throw(\"Le pas de range ne peut pas être zéro\"); NvVal l=nv_list_new(); if(p>0){for(long long i=a;i<b;i+=p)nv_list_append(l,nv_int(i));}else{for(long long i=a;i>b;i+=p)nv_list_append(l,nv_int(i));} return l;}\n");
-    fprintf(out,"    if(strcmp(name,\"erreur\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"erreur() attend un texte\"); nv_throw(args[0].as.s); }\n");
+    fprintf(out,"    if(strcmp(name,\"error\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"error() attend un texte\"); nv_throw(args[0].as.s); }\n");
     for(int i=0;i<func_count;i++) if(funcs[i].owner[0]=='\0') fprintf(out,"    if(strcmp(name,\"%s\")==0) return %s(args,argc,kw);\n",funcs[i].name,funcs[i].internal);
     for(int i=0;i<type_count;i++){
         TypeMeta*t=&types[i];
@@ -1028,12 +1028,12 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"    nv_throwf(\"Fonction inconnue : %%s\",name); return nv_none();\n}\n");
 
     fprintf(out,"static NvVal nv_dispatch_method(NvVal self,const char *name,NvVal *args,int argc,NvDict *kw){\n");
-    fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"ajoute\")==0){ if(argc<1)nv_throw(\"ajoute() attend une valeur\"); nv_list_append(self,args[0]); return nv_none(); }\n");
+    fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"append\")==0){ if(argc<1)nv_throw(\"append() attend une valeur\"); nv_list_append(self,args[0]); return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"retire\")==0){ if(argc<1)nv_throw(\"retire() attend une valeur\"); for(int i=0;i<self.as.list->len;i++){if(nv_same(self.as.list->items[i],args[0])){for(int j=i;j<self.as.list->len-1;j++)self.as.list->items[j]=self.as.list->items[j+1];self.as.list->len--;return nv_none();}} return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_DICT && strcmp(name,\"cles\")==0){ NvVal l=nv_list_new(); for(int i=0;i<self.as.dict->len;i++)nv_list_append(l,nv_str(self.as.dict->keys[i])); return l; }\n");
-    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"lis\")==0) return nv_file_read(self);\n");
+    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"read\")==0) return nv_file_read(self);\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"write\")==0){ if(argc<1)nv_throw(\"file.write() attend une valeur\"); return nv_file_write(self,args[0]); }\n");
-    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"ferme\")==0){ nv_file_close(self); return nv_none(); }\n");
+    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"close\")==0){ nv_file_close(self); return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_OBJ){\n");
     for(int i=0;i<func_count;i++) if(funcs[i].owner[0]){
         fprintf(out,"        if(strcmp(self.as.obj->type,\"%s\")==0 && strcmp(name,\"%s\")==0){ NvVal *margs=nv_xmalloc(sizeof(NvVal)*(argc+1)); margs[0]=self; for(int j=0;j<argc;j++)margs[j+1]=args[j]; NvVal r=%s(margs,argc+1,kw); free(margs); return r; }\n",funcs[i].owner,funcs[i].name,funcs[i].internal);
@@ -1161,7 +1161,7 @@ static void compile_source(FILE*in,const char*cfile){
             if(ap<0||ol!=1)die("Erreur ligne %d : utilise 'with fichier = ouvre(...):'",lineno);
             char lhs[MAX_NAME],rhs[MAX_LINE]; snprintf(lhs,sizeof(lhs),"%.*s",ap,body); snprintf(rhs,sizeof(rhs),"%s",body+ap+1); char *vn=trim(lhs);
             if(!is_ident(vn))die("Erreur ligne %d : nom de fichier invalide",lineno); char *e=compile_expr(trim(rhs),lineno);
-            emit_indent(out,indent); fprintf(out,"{ NvVal %s = %s;\n",vn,e); free(e); scope_add(scope,vn); push_block(BLK_WITH,indent,ok,vn,0); continue;
+            emit_indent(out,indent); fprintf(out,"{ NvVal %s = %s;\n",vn,e); free(e); push_block(BLK_WITH,indent,ok,vn,0); continue;
         }
 
 

@@ -1,5 +1,5 @@
 try:
-    erreur("boom")
+    error("boom")
 catch problem:
     print("Caught:", problem)
 finally:

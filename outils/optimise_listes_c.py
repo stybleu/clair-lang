@@ -484,7 +484,7 @@ def is_safe(name, info, lines):
             continue
 
         if (
-            f'nv_dispatch_method({name}, "ajoute"'
+            f'nv_dispatch_method({name}, "append"'
             in line
         ):
             value = append_value(line)
@@ -548,7 +548,7 @@ def replace_length(line, name):
 
 def replace_append(line, name, list_type):
     if (
-        f'nv_dispatch_method({name}, "ajoute"'
+        f'nv_dispatch_method({name}, "append"'
         not in line
     ):
         return None
@@ -613,7 +613,7 @@ def main():
 
             print(
                 f"  {name} -> "
-                f"{'entier' if typ == 'int' else 'decimal'}"
+                f"{'int' if typ == 'int' else 'float'}"
             )
 
     else:

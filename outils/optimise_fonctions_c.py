@@ -4,7 +4,7 @@ import re
 import sys
 
 
-NUMERIC_TYPES = {"entier", "decimal"}
+NUMERIC_TYPES = {"int", "float"}
 
 
 def strip_outer_parens(expr):
@@ -70,9 +70,9 @@ def unwrap(expr, name):
 
 
 def promote(a, b):
-    if a == "decimal" or b == "decimal":
-        return "decimal"
-    return "entier"
+    if a == "float" or b == "float":
+        return "float"
+    return "int"
 
 
 def infer_expr_type(expr, symbols):
@@ -82,22 +82,22 @@ def infer_expr_type(expr, symbols):
         return symbols.get(expr)
 
     if re.fullmatch(r'-?\d+(?:LL)?', expr):
-        return "entier"
+        return "int"
 
     if re.fullmatch(
         r'-?(?:\d+\.\d*|\d*\.\d+)'
         r'(?:[eE][+-]?\d+)?',
         expr
     ):
-        return "decimal"
+        return "float"
 
     inner = unwrap(expr, "nv_int")
     if inner is not None:
-        return "entier"
+        return "int"
 
     inner = unwrap(expr, "nv_float")
     if inner is not None:
-        return "decimal"
+        return "float"
 
     inner = unwrap(expr, "nv_neg")
     if inner is not None:
@@ -135,7 +135,7 @@ def infer_expr_type(expr, symbols):
         if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
             return None
 
-        return "decimal"
+        return "float"
 
     inner = unwrap(expr, "nv_mod")
     if inner is not None:
@@ -150,7 +150,7 @@ def infer_expr_type(expr, symbols):
         if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
             return None
 
-        return "entier"
+        return "int"
 
     inner = unwrap(expr, "nv_pow")
     if inner is not None:
@@ -165,7 +165,7 @@ def infer_expr_type(expr, symbols):
         if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
             return None
 
-        return "decimal"
+        return "float"
 
     for fn in (
         "nv_lt", "nv_le",
@@ -188,7 +188,7 @@ def infer_expr_type(expr, symbols):
         if a not in NUMERIC_TYPES or b not in NUMERIC_TYPES:
             return None
 
-        return "entier"
+        return "int"
 
     return None
 
@@ -319,7 +319,7 @@ def infer_local_types(lines):
         )
 
         if m:
-            types[m.group(1)] = "entier"
+            types[m.group(1)] = "int"
 
         m = re.match(
             r'\s*NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
@@ -328,7 +328,7 @@ def infer_local_types(lines):
         )
 
         if m:
-            types[m.group(1)] = "decimal"
+            types[m.group(1)] = "float"
 
     # Propagation simple : NvVal b = a;
     changed = True
@@ -392,11 +392,11 @@ def extract_arguments(chunk):
 
 
 def compatible(expected, actual):
-    if expected == "entier":
-        return actual == "entier"
+    if expected == "int":
+        return actual == "int"
 
-    if expected == "decimal":
-        return actual in ("entier", "decimal")
+    if expected == "float":
+        return actual in ("int", "float")
 
     return False
 
@@ -459,10 +459,10 @@ def inline_chunk(
     ):
         expected = info["explicit_types"].get(param)
 
-        if expected == "decimal":
-            param_symbols[param] = "decimal"
-        elif expected == "entier":
-            param_symbols[param] = "entier"
+        if expected == "float":
+            param_symbols[param] = "float"
+        elif expected == "int":
+            param_symbols[param] = "int"
         else:
             param_symbols[param] = actual
 
