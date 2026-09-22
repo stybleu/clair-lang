@@ -117,3 +117,43 @@ __pycache__/
 /clariox_api_test.txt
 /clariox_with_test.txt
 /clariox_test.txt
+
+# === Generated benchmark outputs ===
+
+# Generated Clariox C
+/bench_chaine_compare_dyn.c
+/bench_chaine_compare_native.c
+/bench_chaine_compare_reel_dyn.c
+/bench_chaine_compare_reel_native.c
+/bench_inference.c
+/bench_liste.c
+/bench_liste_append_dyn.c
+/bench_liste_append_native.c
+/bench_liste_decimal_index_dyn.c
+/bench_liste_decimal_index_native.c
+/bench_liste_index_dyn.c
+/bench_liste_index_native.c
+/bench_liste_native.c
+/bench_polymorphe.c
+
+# Benchmark executables
+/bench_chaine_compare_c
+/bench_chaine_compare_dyn
+/bench_chaine_compare_native
+/bench_chaine_compare_reel_c
+/bench_chaine_compare_reel_dyn
+/bench_chaine_compare_reel_native
+/bench_inference
+/bench_liste
+/bench_liste_append_c
+/bench_liste_append_dyn
+/bench_liste_append_native
+/bench_liste_decimal_index_c
+/bench_liste_decimal_index_dyn
+/bench_liste_decimal_index_native
+/bench_liste_index_c
+/bench_liste_index_dyn
+/bench_liste_index_native
+/bench_liste_native
+/bench_polymorphe
+/bench_polymorphe_c
