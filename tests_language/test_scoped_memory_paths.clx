@@ -1,0 +1,45 @@
+fn test_return() -> int:
+    with memory buffer = alloc(32):
+        buffer.write(0, 42)
+        return buffer.read(0)
+
+
+print("Return:", test_return())
+
+
+i = 0
+
+while true:
+    with memory buffer = alloc(32):
+        buffer.write(0, 10)
+        print("Break:", buffer.read(0))
+        break
+
+
+while i < 3:
+    with memory buffer = alloc(32):
+        buffer.write(0, i)
+        print("Continue:", buffer.read(0))
+        i += 1
+        continue
+
+
+try:
+    with memory buffer = alloc(32):
+        buffer.write(0, 77)
+        error("boom")
+catch problem:
+    print("Caught:", problem)
+
+
+with memory outer = alloc(32):
+    outer.write(0, 99)
+
+    try:
+        with memory inner = alloc(32):
+            inner.write(0, 55)
+            error("inner boom")
+    catch problem:
+        print("Outer survives:", outer.read(0))
+
+print("All scoped paths OK")

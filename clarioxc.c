@@ -695,6 +695,7 @@ static const char *RUNTIME_C =
 "typedef struct NvCall NvCall;\n"
 "typedef struct NvTryFrame NvTryFrame;\n"
 "typedef struct NvMemory NvMemory;\n"
+"typedef struct NvMemoryScope NvMemoryScope;\n"
 "\n"
 "typedef enum { NV_NONE, NV_INT, NV_FLOAT, NV_BOOL, NV_STR, NV_LIST, NV_DICT, NV_OBJ, NV_FILE, NV_MEMORY } NvKind;\n"
 "struct NvVal { NvKind kind; union { long long i; double f; int b; char *s; NvList *list; NvDict *dict; NvObj *obj; FILE *file; NvMemory *memory; } as; };\n"
@@ -702,9 +703,11 @@ static const char *RUNTIME_C =
 "struct NvDict { char **keys; NvVal *vals; int len, cap; };\n"
 "struct NvObj { char *type; NvDict *fields; };\n"
 "struct NvCall { NvVal *args; int argc, cap; NvDict *kw; };\n"
-"struct NvTryFrame { jmp_buf env; NvTryFrame *prev; };\n"
+"struct NvTryFrame { jmp_buf env; NvTryFrame *prev; NvMemoryScope *memory_scope; };\n"
 "struct NvMemory { unsigned char *data; size_t size; int freed; NvMemory *next; };\n"
+"struct NvMemoryScope { NvMemory *memory; NvMemoryScope *prev; };\n"
 "static NvMemory *nv_memory_head = NULL;\n"
+"static NvMemoryScope *nv_memory_scope_top = NULL;\n"
 "static int nv_memory_cleanup_registered = 0;\n"
 "static NvTryFrame *nv_try_top = NULL;\n"
 "static char nv_error_message[1024] = {0};\n"
@@ -760,14 +763,19 @@ static const char *RUNTIME_C =
 "static NvVal nv_list_new(void){ NvVal v=nv_none(); v.kind=NV_LIST; v.as.list=nv_xmalloc(sizeof(NvList)); v.as.list->items=NULL; v.as.list->len=0; v.as.list->cap=0; return v;}\n"
 "static NvVal nv_file_value(FILE *f){ NvVal v=nv_none(); v.kind=NV_FILE; v.as.file=f; return v;}\n"
 "static NvVal nv_to_str(NvVal v){ char b[256]; switch(v.kind){case NV_STR:return nv_str(v.as.s);case NV_NONE:return nv_str(\"none\");case NV_INT:snprintf(b,sizeof(b),\"%lld\",v.as.i);return nv_str(b);case NV_FLOAT:snprintf(b,sizeof(b),\"%g\",v.as.f);return nv_str(b);case NV_BOOL:return nv_str(v.as.b?\"true\":\"false\");case NV_LIST:return nv_str(\"<list>\");case NV_DICT:return nv_str(\"<dict>\");case NV_OBJ:snprintf(b,sizeof(b),\"<%s>\",v.as.obj->type);return nv_str(b);case NV_MEMORY:if(!v.as.memory||v.as.memory->freed)return nv_str(\"<memory freed>\");snprintf(b,sizeof(b),\"<memory %zu bytes>\",v.as.memory->size);return nv_str(b);case NV_FILE:return nv_str(\"<file>\");}return nv_str(\"\");}\n"
-"static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error_message),\"%s\",msg); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Clariox error: %s\\n\",msg); exit(1);}\n"
-"static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Clariox error: %s\\n\",nv_error_message); exit(1);}\n"
+"static void nv_memory_scope_cleanup_to(NvMemoryScope *target);\n"
+"static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error_message),\"%s\",msg); if(nv_try_top){nv_memory_scope_cleanup_to(nv_try_top->memory_scope);longjmp(nv_try_top->env,1);} nv_memory_scope_cleanup_to(NULL); fprintf(stderr,\"Clariox error: %s\\n\",msg); exit(1);}\n"
+"static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top){nv_memory_scope_cleanup_to(nv_try_top->memory_scope);longjmp(nv_try_top->env,1);} nv_memory_scope_cleanup_to(NULL); fprintf(stderr,\"Clariox error: %s\\n\",nv_error_message); exit(1);}\n"
 "static int nv_truth(NvVal v){ switch(v.kind){case NV_NONE:return 0;case NV_BOOL:return v.as.b;case NV_INT:return v.as.i!=0;case NV_FLOAT:return v.as.f!=0.0;case NV_STR:return v.as.s&&v.as.s[0];case NV_LIST:return v.as.list&&v.as.list->len>0;case NV_DICT:return v.as.dict&&v.as.dict->len>0;case NV_OBJ:return 1;case NV_MEMORY:return v.as.memory&&!v.as.memory->freed;case NV_FILE:return v.as.file!=NULL;} return 0;}\n"
 "static double nv_num(NvVal v){ if(v.kind==NV_INT)return(double)v.as.i; if(v.kind==NV_FLOAT)return v.as.f; if(v.kind==NV_BOOL)return(double)v.as.b; nv_throw(\"Expected a numeric value\"); return 0;}\n"
-"static void nv_memory_shutdown(void){ NvMemory*m=nv_memory_head; size_t leaks=0,bytes=0; while(m){ NvMemory*next=m->next; if(!m->freed){leaks++;bytes+=m->size;} free(m); m=next; } nv_memory_head=NULL; if(leaks)fprintf(stderr,\"Clariox memory warning: %zu manual allocation(s) not freed (%zu bytes)\\n\",leaks,bytes); }\n"
+"static void nv_memory_shutdown(void){ nv_memory_scope_cleanup_to(NULL); NvMemory*m=nv_memory_head; size_t leaks=0,bytes=0; while(m){ NvMemory*next=m->next; if(!m->freed){leaks++;bytes+=m->size;} free(m); m=next; } nv_memory_head=NULL; if(leaks)fprintf(stderr,\"Clariox memory warning: %zu manual allocation(s) not freed (%zu bytes)\\n\",leaks,bytes); }\n"
 "static NvMemory *nv_memory_get(NvVal v){ if(v.kind!=NV_MEMORY||!v.as.memory)nv_throw(\"Expected a memory block\"); if(v.as.memory->freed)nv_throw(\"Memory block has already been freed\"); return v.as.memory; }\n"
 "static NvVal nv_memory_alloc(NvVal sizev){ long long n=(long long)nv_num(sizev); if(n<=0)nv_throw(\"alloc() size must be greater than zero\"); NvMemory*m=nv_xmalloc(sizeof(*m)); m->data=nv_xmalloc((size_t)n); memset(m->data,0,(size_t)n); m->size=(size_t)n; m->freed=0; m->next=nv_memory_head; nv_memory_head=m; if(!nv_memory_cleanup_registered){atexit(nv_memory_shutdown);nv_memory_cleanup_registered=1;} NvVal v=nv_none();v.kind=NV_MEMORY;v.as.memory=m;return v; }\n"
 "static NvVal nv_memory_free(NvVal v){ NvMemory*m=nv_memory_get(v); free(m->data); m->data=NULL; m->freed=1; return nv_none(); }\n"
+"static void nv_memory_free_scoped(NvVal v){ if(v.kind!=NV_MEMORY||!v.as.memory)return; NvMemory*m=v.as.memory; if(m->freed)return; free(m->data); m->data=NULL; m->freed=1; }\n"
+"static void nv_memory_scope_enter(NvVal v){ NvMemory*m=nv_memory_get(v); NvMemoryScope*s=nv_xmalloc(sizeof(*s)); s->memory=m; s->prev=nv_memory_scope_top; nv_memory_scope_top=s; }\n"
+"static void nv_memory_scope_leave(NvVal v){ if(v.kind!=NV_MEMORY||!v.as.memory)return; if(!nv_memory_scope_top||nv_memory_scope_top->memory!=v.as.memory)nv_throw(\"Internal scoped-memory stack mismatch\"); NvMemoryScope*s=nv_memory_scope_top; nv_memory_scope_top=s->prev; nv_memory_free_scoped(v); free(s); }\n"
+"static void nv_memory_scope_cleanup_to(NvMemoryScope *target){ while(nv_memory_scope_top && nv_memory_scope_top!=target){ NvMemoryScope*s=nv_memory_scope_top; nv_memory_scope_top=s->prev; if(s->memory && !s->memory->freed){free(s->memory->data);s->memory->data=NULL;s->memory->freed=1;} free(s); } }\n"
 "static NvVal nv_memory_size(NvVal v){ NvMemory*m=nv_memory_get(v); return nv_int((long long)m->size); }\n"
 "static NvVal nv_memory_read(NvVal v,NvVal index){ NvMemory*m=nv_memory_get(v); long long i=(long long)nv_num(index); if(i<0||(unsigned long long)i>=(unsigned long long)m->size)nv_throw(\"Memory index out of range\"); return nv_int((long long)m->data[i]); }\n"
 "static NvVal nv_memory_write(NvVal v,NvVal index,NvVal value){ NvMemory*m=nv_memory_get(v); long long i=(long long)nv_num(index); long long x=(long long)nv_num(value); if(i<0||(unsigned long long)i>=(unsigned long long)m->size)nv_throw(\"Memory index out of range\"); if(x<0||x>255)nv_throw(\"Memory byte must be between 0 and 255\"); m->data[i]=(unsigned char)x; return nv_none(); }\n"
@@ -825,7 +833,7 @@ typedef enum {
     BLK_IF, BLK_WHILE, BLK_FOR,
     BLK_FUNC, BLK_OBJECT, BLK_STRUCTURE,
     BLK_TRY, BLK_CATCH, BLK_ALWAYS,
-    BLK_MATCH, BLK_CASE, BLK_WITH
+    BLK_MATCH, BLK_CASE, BLK_WITH, BLK_WITH_MEMORY
 } BlockKind;
 
 typedef enum { OUT_MAIN, OUT_FUNC, OUT_NONE } OutKind;
@@ -893,6 +901,9 @@ static void close_one_block(void) {
         case BLK_WITH:
             if(out){emit_indent(out,b.indent+4);fprintf(out,"nv_file_close(%s);\n",b.owner);emit_indent(out,b.indent);fprintf(out,"}\n");}
             break;
+        case BLK_WITH_MEMORY:
+            if(out){emit_indent(out,b.indent+4);fprintf(out,"nv_memory_scope_leave(%s);\n",b.owner);emit_indent(out,b.indent);fprintf(out,"}\n");}
+            break;
         case BLK_MATCH:
             if(out){emit_indent(out,b.indent);fprintf(out,"}\n");}
             break;
@@ -904,6 +915,37 @@ static void close_one_block(void) {
 
 static void close_blocks_above_indent(int indent) {
     while(block_count>0 && blocks[block_count-1].indent>indent) close_one_block();
+}
+
+static void emit_memory_cleanup_for_return(FILE *out,int indent){
+    for(int bi=block_count-1;bi>=0;bi--){
+        if(blocks[bi].kind==BLK_WITH_MEMORY){
+            emit_indent(out,indent);
+            fprintf(out,"nv_memory_scope_leave(%s);\n",blocks[bi].owner);
+        }
+        if(blocks[bi].kind==BLK_FUNC)break;
+    }
+}
+
+static void emit_memory_cleanup_for_loop_jump(FILE *out,int indent){
+    int loop_index=-1;
+
+    for(int bi=block_count-1;bi>=0;bi--){
+        if(blocks[bi].kind==BLK_FOR ||
+           blocks[bi].kind==BLK_WHILE){
+            loop_index=bi;
+            break;
+        }
+    }
+
+    if(loop_index<0)return;
+
+    for(int bi=block_count-1;bi>loop_index;bi--){
+        if(blocks[bi].kind==BLK_WITH_MEMORY){
+            emit_indent(out,indent);
+            fprintf(out,"nv_memory_scope_leave(%s);\n",blocks[bi].owner);
+        }
+    }
 }
 
 
@@ -1217,6 +1259,72 @@ static void compile_source(FILE*in,const char*cfile){
             emit_indent(out,indent); fprintf(out,"{ NvVal __match%d = %s;\n",id,e); free(e); push_block(BLK_MATCH,indent,ok,NULL,id); continue;
         }
 
+        /* mémoire allouée explicitement et libérée automatiquement */
+        if(strncmp(s,"with memory ",12)==0){
+            size_t n=strlen(s);
+
+            if(n<14 || s[n-1]!=':')
+                die("Line %d: expected ':' after with memory",lineno);
+
+            char body[MAX_LINE];
+            snprintf(body,sizeof(body),"%s",s+12);
+
+            size_t bn=strlen(body);
+            if(bn==0 || body[bn-1]!=':')
+                die("Line %d: invalid with memory statement",lineno);
+
+            body[bn-1]='\0';
+
+            int ol=0;
+            int ap=find_top_level_assignment(body,&ol);
+
+            if(ap<0 || ol!=1)
+                die("Line %d: use 'with memory name = alloc(size):'",lineno);
+
+            char lhs[MAX_NAME];
+            char rhs[MAX_LINE];
+
+            snprintf(lhs,sizeof(lhs),"%.*s",ap,body);
+            snprintf(rhs,sizeof(rhs),"%s",body+ap+1);
+
+            char *vn=trim(lhs);
+            char *rv=trim(rhs);
+
+            if(!is_ident(vn))
+                die("Line %d: invalid memory variable name",lineno);
+
+            if(strncmp(rv,"alloc",5)!=0 ||
+               !(rv[5]=='(' || isspace((unsigned char)rv[5])))
+                die("Line %d: with memory currently requires alloc(...)",lineno);
+
+            manual_alloc_context=1;
+            char *e=compile_expr(rv,lineno);
+            manual_alloc_context=0;
+
+            emit_indent(out,indent);
+            fprintf(out,"{ NvVal %s = %s;\n",vn,e);
+
+            emit_indent(out,indent+4);
+            fprintf(out,
+                    "nv_expect_type(%s, \"memory\", \"%s\");\n",
+                    vn,vn);
+
+            emit_indent(out,indent+4);
+            fprintf(out,"nv_memory_scope_enter(%s);\n",vn);
+
+            free(e);
+
+            push_block(
+                BLK_WITH_MEMORY,
+                indent,
+                ok,
+                vn,
+                0
+            );
+
+            continue;
+        }
+
         /* avec ferme automatiquement un fichier à la fin normale du bloc */
         if(strncmp(s,"with ",5)==0){
             size_t n=strlen(s); if(s[n-1]!=':')die("Line %d: expected ':' after with",lineno);
@@ -1232,11 +1340,37 @@ static void compile_source(FILE*in,const char*cfile){
         if(strcmp(s,"break")==0 || strcmp(s,"continue")==0){
             int loop=0; for(int bi=block_count-1;bi>=0;bi--){if(blocks[bi].kind==BLK_FOR||blocks[bi].kind==BLK_WHILE){loop=1;break;}}
             if(!loop)die("Line %d: '%s' must be used inside a loop",lineno,s);
-            emit_indent(out,indent); fprintf(out,strcmp(s,"break")==0?"break;\n":"continue;\n"); continue;
+            emit_memory_cleanup_for_loop_jump(out,indent);
+            emit_indent(out,indent);
+            fprintf(out,strcmp(s,"break")==0?"break;\n":"continue;\n");
+            continue;
         }
 
         /* retour */
-        if(strncmp(s,"return",6)==0 && (s[6]=='\0'||isspace((unsigned char)s[6]))){char*rest=trim(s+7);emit_indent(out,indent);if(*rest){char*e=compile_expr(rest,lineno);fprintf(out,"return %s;\n",e);free(e);}else fprintf(out,"return nv_none();\n");continue;}
+        if(strncmp(s,"return",6)==0 && (s[6]=='\0'||isspace((unsigned char)s[6]))){
+            char*rest=trim(s+7);
+
+            if(*rest){
+                char*e=compile_expr(rest,lineno);
+
+                emit_indent(out,indent);
+                fprintf(out,"NvVal __ret%d = %s;\n",lineno,e);
+
+                free(e);
+
+                emit_memory_cleanup_for_return(out,indent);
+
+                emit_indent(out,indent);
+                fprintf(out,"return __ret%d;\n",lineno);
+            }else{
+                emit_memory_cleanup_for_return(out,indent);
+
+                emit_indent(out,indent);
+                fprintf(out,"return nv_none();\n");
+            }
+
+            continue;
+        }
 
         /* si / sinonsi / sinon */
         if(strncmp(s,"if ",3)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Line %d: expected ':' after if",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-4,s+3);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
@@ -1250,7 +1384,7 @@ static void compile_source(FILE*in,const char*cfile){
         if(strncmp(s,"for ",4)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Line %d: expected ':' after for",lineno);char tmp[MAX_LINE];snprintf(tmp,sizeof(tmp),"%.*s",(int)n-5,s+4);char*din=strstr(tmp," in ");if(!din)die("Line %d: expected 'in'",lineno);*din='\0';char*vn=trim(tmp);char*iter=trim(din+4);if(!is_ident(vn))die("Line %d: invalid loop variable",lineno);char*ie=compile_expr(iter,lineno);int id=lineno;emit_indent(out,indent);fprintf(out,"{ NvVal __iter%d = %s; for (int __i%d=0; __i%d<nv_len(__iter%d); __i%d++) {\n",id,ie,id,id,id,id);free(ie);emit_indent(out,indent+4);if(!scope_has(scope,vn)){fprintf(out,"NvVal %s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);scope_add(scope,vn);}else fprintf(out,"%s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);push_block(BLK_FOR,indent,ok,NULL,0);continue;}
 
         /* tente */
-        if(strcmp(s,"try:")==0){int id=++try_counter;emit_indent(out,indent);fprintf(out,"NvTryFrame __try%d; __try%d.prev=nv_try_top; nv_try_top=&__try%d; if (setjmp(__try%d.env)==0) {\n",id,id,id,id);push_block(BLK_TRY,indent,ok,NULL,id);continue;}
+        if(strcmp(s,"try:")==0){int id=++try_counter;emit_indent(out,indent);fprintf(out,"NvTryFrame __try%d; __try%d.prev=nv_try_top; __try%d.memory_scope=nv_memory_scope_top; nv_try_top=&__try%d; if (setjmp(__try%d.env)==0) {\n",id,id,id,id,id);push_block(BLK_TRY,indent,ok,NULL,id);continue;}
 
         /* Affectation */
         int oplen=0;int apos=find_top_level_assignment(s,&oplen);if(apos>=0){char lhs[MAX_LINE],rhs[MAX_LINE];snprintf(lhs,sizeof(lhs),"%.*s",apos,s);snprintf(rhs,sizeof(rhs),"%s",s+apos+oplen);char aug[2]={0};if(oplen==2){aug[0]=s[apos];aug[1]='\0';}emit_set_lvalue(out,indent,trim(lhs),trim(rhs),lineno,scope,NULL,aug[0]?aug:NULL);continue;}

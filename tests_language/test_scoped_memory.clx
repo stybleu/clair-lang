@@ -1,0 +1,14 @@
+print("Before scope")
+
+with memory buffer = alloc(64):
+    print("Inside:", buffer)
+    print("Size:", buffer.size())
+
+    buffer.write(0, 42)
+    buffer.write(63, 99)
+
+    print("First:", buffer.read(0))
+    print("Last:", buffer.read(63))
+
+print("After scope")
+print("Scoped memory released automatically")
