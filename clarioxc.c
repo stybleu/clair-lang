@@ -580,7 +580,7 @@ static char *parse_postfix(Lexer *lx) {
 }
 
 static char *parse_unary(Lexer *lx) {
-    if (is_kw(lx, "non")) {
+    if (is_kw(lx, "not")) {
         advance(lx);
         char *a = parse_unary(lx);
         char *r = fmtdup("nv_not(%s)", a); free(a); return r;
@@ -648,7 +648,7 @@ static char *parse_cmp(Lexer *lx) {
 
 static char *parse_and(Lexer *lx) {
     char *a = parse_cmp(lx);
-    while (is_kw(lx, "et")) {
+    while (is_kw(lx, "and")) {
         advance(lx);
         char *b = parse_cmp(lx);
         a = join_binary("nv_and", a, b);
@@ -658,7 +658,7 @@ static char *parse_and(Lexer *lx) {
 
 static char *parse_expr(Lexer *lx) {
     char *a = parse_and(lx);
-    while (is_kw(lx, "ou")) {
+    while (is_kw(lx, "or")) {
         advance(lx);
         char *b = parse_and(lx);
         a = join_binary("nv_or", a, b);
@@ -1030,7 +1030,7 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"static NvVal nv_dispatch_method(NvVal self,const char *name,NvVal *args,int argc,NvDict *kw){\n");
     fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"append\")==0){ if(argc<1)nv_throw(\"append() expects a value\"); nv_list_append(self,args[0]); return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"remove\")==0){ if(argc<1)nv_throw(\"remove() expects a value\"); for(int i=0;i<self.as.list->len;i++){if(nv_same(self.as.list->items[i],args[0])){for(int j=i;j<self.as.list->len-1;j++)self.as.list->items[j]=self.as.list->items[j+1];self.as.list->len--;return nv_none();}} return nv_none(); }\n");
-    fprintf(out,"    if(self.kind==NV_DICT && strcmp(name,\"cles\")==0){ NvVal l=nv_list_new(); for(int i=0;i<self.as.dict->len;i++)nv_list_append(l,nv_str(self.as.dict->keys[i])); return l; }\n");
+    fprintf(out,"    if(self.kind==NV_DICT && strcmp(name,\"keys\")==0){ NvVal l=nv_list_new(); for(int i=0;i<self.as.dict->len;i++)nv_list_append(l,nv_str(self.as.dict->keys[i])); return l; }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"read\")==0) return nv_file_read(self);\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"write\")==0){ if(argc<1)nv_throw(\"file.write() expects a value\"); return nv_file_write(self,args[0]); }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"close\")==0){ nv_file_close(self); return nv_none(); }\n");

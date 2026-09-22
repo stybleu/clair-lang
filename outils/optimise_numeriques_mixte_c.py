@@ -310,7 +310,7 @@ def repair(lines):
                 # Les temporaires de "selon" doivent rester NvVal :
                 # ils sont utilisés ensuite par les comparaisons
                 # dynamiques du runtime.
-                if not name.startswith("__selon"):
+                if not name.startswith("__match"):
                     lowered = lower(rhs, known)
 
                     if lowered and lowered[1] == "int":
@@ -374,7 +374,7 @@ def repair(lines):
         # n'est pas au début de la ligne.
         #
         # Exemple généré par "selon" :
-        # { NvVal __selon1 = couleur;
+        # { NvVal __match1 = couleur;
         def box_nvval_assignment(match):
             target = match.group(1)
             source = match.group(2)
@@ -397,10 +397,10 @@ def repair(lines):
         )
 
         # Exemple :
-        # NvVal __selon1 = couleur;
+        # NvVal __match1 = couleur;
         #
         # devient :
-        # NvVal __selon1 = clariox_string_box(couleur);
+        # NvVal __match1 = clariox_string_box(couleur);
         m = re.match(
             r'^(\s*)NvVal\s+'
             r'([A-Za-z_][A-Za-z0-9_]*)'

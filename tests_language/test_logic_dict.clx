@@ -1,0 +1,15 @@
+active = true
+invited = false
+
+if active and not invited:
+    print("AND/NOT OK")
+
+if invited or active:
+    print("OR OK")
+
+person = {
+    "name": "Alice",
+    "age": 25
+}
+
+print("Keys:", person.keys())
