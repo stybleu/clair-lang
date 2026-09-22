@@ -2,4 +2,4 @@ a = "Al"
 b = "ice"
 nom = a + b
 
-ecris(nom)
+print(nom)

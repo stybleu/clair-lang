@@ -505,14 +505,14 @@ def is_safe(name, info, lines):
             continue
 
         if (
-            'nv_dispatch_call("len"' in line
+            'nv_dispatch_call("longueur"' in line
             and f"nv_call_add(&__c, {name})"
             in line
         ):
             continue
 
         if (
-            'nv_dispatch_call("print"' in line
+            'nv_dispatch_call("ecris"' in line
             and f"nv_call_add(&__c, {name})"
             in line
         ):
@@ -530,7 +530,7 @@ def replace_length(line, name):
         rf'nv_call_add\(&__c,\s*'
         rf'{re.escape(name)}\);\s*'
         r'NvVal __r = nv_dispatch_call\('
-        r'"len",\s*'
+        r'"longueur",\s*'
         r'__c\.args,\s*'
         r'__c\.argc,\s*'
         r'__c\.kw'

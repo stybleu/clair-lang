@@ -65,7 +65,7 @@ charger_fichier() {
 
     while IFS= read -r ligne || [ -n "$ligne" ]; do
 
-        if [[ "$ligne" =~ ^[[:space:]]*utilise[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*$ ]]; then
+        if [[ "$ligne" =~ ^[[:space:]]*use[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*$ ]]; then
 
             module="${BASH_REMATCH[1]}"
             module_file="$ROOT/modules/$module.clx"

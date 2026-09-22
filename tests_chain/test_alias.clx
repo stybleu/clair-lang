@@ -3,5 +3,5 @@ b = a
 
 a = "Alex"
 
-ecris(a)
-ecris(b)
+print(a)
+print(b)

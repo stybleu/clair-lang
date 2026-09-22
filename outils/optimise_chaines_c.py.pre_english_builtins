@@ -891,7 +891,7 @@ def replace_length(line, name):
         rf'nv_call_add\(&__c,\s*'
         rf'{re.escape(name)}\);\s*'
         r'NvVal __r = nv_dispatch_call\('
-        r'"len",\s*'
+        r'"longueur",\s*'
         r'__c\.args,\s*'
         r'__c\.argc,\s*'
         r'__c\.kw'
@@ -1366,7 +1366,7 @@ def main():
 
             rhs = m_assign.group(2)
             # CLAIR_NORMALISE_LONGUEUR_AVANT_STRING_CODE
-            # len(chaine_native) doit être abaissé avant
+            # longueur(chaine_native) doit être abaissé avant
             # l'analyse d'une indexation/concaténation.
             for native_name in native:
                 rhs = replace_length(rhs, native_name)
@@ -1485,7 +1485,7 @@ def main():
         )
 
         # Passage d'une chaîne native vers
-        # une fonction dynamique comme print().
+        # une fonction dynamique comme ecris().
         for name in native:
             new_line = re.sub(
                 rf'nv_call_add\(&__c,\s*'

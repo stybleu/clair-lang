@@ -472,9 +472,9 @@ static char *parse_primary(Lexer *lx) {
         return compile_interpolated_string(tmp, lx->lineno);
     }
 
-    if (is_kw(lx, "vrai")) { advance(lx); return xstrdup("nv_bool(1)"); }
-    if (is_kw(lx, "faux")) { advance(lx); return xstrdup("nv_bool(0)"); }
-    if (is_kw(lx, "rien")) { advance(lx); return xstrdup("nv_none()"); }
+    if (is_kw(lx, "true")) { advance(lx); return xstrdup("nv_bool(1)"); }
+    if (is_kw(lx, "false")) { advance(lx); return xstrdup("nv_bool(0)"); }
+    if (is_kw(lx, "none")) { advance(lx); return xstrdup("nv_none()"); }
 
     if (lx->cur.kind == TK_LPAREN) {
         advance(lx);
@@ -631,8 +631,8 @@ static char *parse_range(Lexer *lx) {
 
 static char *parse_cmp(Lexer *lx) {
     char *a = parse_range(lx);
-    while (lx->cur.kind==TK_EQEQ || lx->cur.kind==TK_NE || lx->cur.kind==TK_LT || lx->cur.kind==TK_LE || lx->cur.kind==TK_GT || lx->cur.kind==TK_GE || is_kw(lx,"dans")) {
-        int membership = is_kw(lx,"dans");
+    while (lx->cur.kind==TK_EQEQ || lx->cur.kind==TK_NE || lx->cur.kind==TK_LT || lx->cur.kind==TK_LE || lx->cur.kind==TK_GT || lx->cur.kind==TK_GE || is_kw(lx,"in")) {
+        int membership = is_kw(lx,"in");
         TokenKind op = lx->cur.kind; advance(lx);
         char *b = parse_range(lx);
         if (membership) {
@@ -752,7 +752,7 @@ static const char *RUNTIME_C =
 "static NvVal nv_dict_new_value(void){ NvVal v=nv_none(); v.kind=NV_DICT; v.as.dict=nv_dict_new(); return v;}\n"
 "static NvVal nv_list_new(void){ NvVal v=nv_none(); v.kind=NV_LIST; v.as.list=nv_xmalloc(sizeof(NvList)); v.as.list->items=NULL; v.as.list->len=0; v.as.list->cap=0; return v;}\n"
 "static NvVal nv_file_value(FILE *f){ NvVal v=nv_none(); v.kind=NV_FILE; v.as.file=f; return v;}\n"
-"static NvVal nv_to_str(NvVal v){ char b[256]; switch(v.kind){case NV_STR:return nv_str(v.as.s);case NV_NONE:return nv_str(\"rien\");case NV_INT:snprintf(b,sizeof(b),\"%lld\",v.as.i);return nv_str(b);case NV_FLOAT:snprintf(b,sizeof(b),\"%g\",v.as.f);return nv_str(b);case NV_BOOL:return nv_str(v.as.b?\"vrai\":\"faux\");case NV_LIST:return nv_str(\"<liste>\");case NV_DICT:return nv_str(\"<table>\");case NV_OBJ:snprintf(b,sizeof(b),\"<%s>\",v.as.obj->type);return nv_str(b);case NV_FILE:return nv_str(\"<fichier>\");}return nv_str(\"\");}\n"
+"static NvVal nv_to_str(NvVal v){ char b[256]; switch(v.kind){case NV_STR:return nv_str(v.as.s);case NV_NONE:return nv_str(\"none\");case NV_INT:snprintf(b,sizeof(b),\"%lld\",v.as.i);return nv_str(b);case NV_FLOAT:snprintf(b,sizeof(b),\"%g\",v.as.f);return nv_str(b);case NV_BOOL:return nv_str(v.as.b?\"true\":\"false\");case NV_LIST:return nv_str(\"<liste>\");case NV_DICT:return nv_str(\"<table>\");case NV_OBJ:snprintf(b,sizeof(b),\"<%s>\",v.as.obj->type);return nv_str(b);case NV_FILE:return nv_str(\"<fichier>\");}return nv_str(\"\");}\n"
 "static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error_message),\"%s\",msg); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Erreur Clariox : %s\\n\",msg); exit(1);}\n"
 "static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Erreur Clariox : %s\\n\",nv_error_message); exit(1);}\n"
 "static int nv_truth(NvVal v){ switch(v.kind){case NV_NONE:return 0;case NV_BOOL:return v.as.b;case NV_INT:return v.as.i!=0;case NV_FLOAT:return v.as.f!=0.0;case NV_STR:return v.as.s&&v.as.s[0];case NV_LIST:return v.as.list&&v.as.list->len>0;case NV_DICT:return v.as.dict&&v.as.dict->len>0;case NV_OBJ:return 1;case NV_FILE:return v.as.file!=NULL;} return 0;}\n"
@@ -770,7 +770,7 @@ static const char *RUNTIME_C =
 "static int nv_same(NvVal a,NvVal b){ if(a.kind!=b.kind){if((a.kind==NV_INT||a.kind==NV_FLOAT||a.kind==NV_BOOL)&&(b.kind==NV_INT||b.kind==NV_FLOAT||b.kind==NV_BOOL))return nv_num(a)==nv_num(b);return 0;} switch(a.kind){case NV_NONE:return 1;case NV_INT:return a.as.i==b.as.i;case NV_FLOAT:return a.as.f==b.as.f;case NV_BOOL:return a.as.b==b.as.b;case NV_STR:return strcmp(a.as.s,b.as.s)==0;case NV_FILE:return a.as.file==b.as.file;default:return a.as.obj==b.as.obj;} }\n"
 "static NvVal nv_eq(NvVal a,NvVal b){return nv_bool(nv_same(a,b));} static NvVal nv_ne(NvVal a,NvVal b){return nv_bool(!nv_same(a,b));}\n"
 "static NvVal nv_lt(NvVal a,NvVal b){return nv_bool(nv_num(a)<nv_num(b));} static NvVal nv_le(NvVal a,NvVal b){return nv_bool(nv_num(a)<=nv_num(b));} static NvVal nv_gt(NvVal a,NvVal b){return nv_bool(nv_num(a)>nv_num(b));} static NvVal nv_ge(NvVal a,NvVal b){return nv_bool(nv_num(a)>=nv_num(b));}\n"
-"static void nv_print_one(NvVal v){ switch(v.kind){case NV_NONE:printf(\"rien\");break;case NV_INT:printf(\"%lld\",v.as.i);break;case NV_FLOAT:printf(\"%g\",v.as.f);break;case NV_BOOL:printf(\"%s\",v.as.b?\"vrai\":\"faux\");break;case NV_STR:printf(\"%s\",v.as.s);break;case NV_LIST:printf(\"[\");for(int i=0;i<v.as.list->len;i++){if(i)printf(\", \");nv_print_one(v.as.list->items[i]);}printf(\"]\");break;case NV_DICT:printf(\"{\");for(int i=0;i<v.as.dict->len;i++){if(i)printf(\", \");printf(\"\\\"%s\\\": \",v.as.dict->keys[i]);nv_print_one(v.as.dict->vals[i]);}printf(\"}\");break;case NV_OBJ:printf(\"<%s>\",v.as.obj->type);break;case NV_FILE:printf(\"<fichier>\");break;} }\n"
+"static void nv_print_one(NvVal v){ switch(v.kind){case NV_NONE:printf(\"none\");break;case NV_INT:printf(\"%lld\",v.as.i);break;case NV_FLOAT:printf(\"%g\",v.as.f);break;case NV_BOOL:printf(\"%s\",v.as.b?\"true\":\"false\");break;case NV_STR:printf(\"%s\",v.as.s);break;case NV_LIST:printf(\"[\");for(int i=0;i<v.as.list->len;i++){if(i)printf(\", \");nv_print_one(v.as.list->items[i]);}printf(\"]\");break;case NV_DICT:printf(\"{\");for(int i=0;i<v.as.dict->len;i++){if(i)printf(\", \");printf(\"\\\"%s\\\": \",v.as.dict->keys[i]);nv_print_one(v.as.dict->vals[i]);}printf(\"}\");break;case NV_OBJ:printf(\"<%s>\",v.as.obj->type);break;case NV_FILE:printf(\"<fichier>\");break;} }\n"
 "static void nv_list_append(NvVal l,NvVal v){ if(l.kind!=NV_LIST)nv_throw(\"ajoute() nécessite une liste\"); NvList*p=l.as.list; if(p->len==p->cap){p->cap=p->cap?p->cap*2:8;p->items=realloc(p->items,sizeof(NvVal)*p->cap);} p->items[p->len++]=v;}\n"
 "static NvVal nv_range(NvVal a,NvVal b){ long long x=(long long)nv_num(a), y=(long long)nv_num(b); NvVal l=nv_list_new(); if(x<=y){for(long long i=x;i<y;i++)nv_list_append(l,nv_int(i));}else{for(long long i=x;i>y;i--)nv_list_append(l,nv_int(i));} return l;}\n"
 "static void nv_file_close(NvVal v){ if(v.kind==NV_FILE && v.as.file) fclose(v.as.file); }\n"
@@ -788,7 +788,7 @@ static const char *RUNTIME_C =
 "static NvVal nv_get_field(NvVal a,const char*name){if(a.kind!=NV_OBJ)nv_throw(\"Accès à un champ sur une valeur qui n'est pas un objet\");return nv_dict_get(a.as.obj->fields,name);}\n"
 "static void nv_set_field(NvVal a,const char*name,NvVal v){if(a.kind!=NV_OBJ)nv_throw(\"Affectation de champ sur une valeur qui n'est pas un objet\");nv_dict_set(a.as.obj->fields,name,v);}\n"
 "static NvVal nv_object_new(const char*type){NvVal v=nv_none();v.kind=NV_OBJ;v.as.obj=nv_xmalloc(sizeof(NvObj));v.as.obj->type=nv_strdup(type);v.as.obj->fields=nv_dict_new();return v;}\n"
-"static int nv_len(NvVal v){if(v.kind==NV_LIST)return v.as.list->len;if(v.kind==NV_DICT)return v.as.dict->len;if(v.kind==NV_STR)return(int)strlen(v.as.s);nv_throw(\"longueur() nécessite une liste, une table ou un texte\");return 0;}\n"
+"static int nv_len(NvVal v){if(v.kind==NV_LIST)return v.as.list->len;if(v.kind==NV_DICT)return v.as.dict->len;if(v.kind==NV_STR)return(int)strlen(v.as.s);nv_throw(\"len() nécessite une liste, une table ou un texte\");return 0;}\n"
 "static NvVal nv_iter_get(NvVal v,int i){if(v.kind==NV_LIST)return v.as.list->items[i];if(v.kind==NV_DICT)return nv_str(v.as.dict->keys[i]);if(v.kind==NV_STR){char t[2]={v.as.s[i],0};return nv_str(t);}nv_throw(\"Cette valeur n'est pas parcourable\");return nv_none();}\n"
 "static NvCall nv_call_new(void){NvCall c;c.args=NULL;c.argc=0;c.cap=0;c.kw=nv_dict_new();return c;}\n"
 "static void nv_call_add(NvCall*c,NvVal v){if(c->argc==c->cap){c->cap=c->cap?c->cap*2:8;c->args=realloc(c->args,sizeof(NvVal)*c->cap);}c->args[c->argc++]=v;}\n"
@@ -993,7 +993,7 @@ static void emit_set_lvalue(FILE*out,int indent,const char*lhs,const char*rhs,in
 static void emit_dispatch(FILE*out){
     fprintf(out,"\nstatic NvVal nv_builtin_print(NvVal *args,int argc){for(int i=0;i<argc;i++){if(i)printf(\" \");nv_print_one(args[i]);}printf(\"\\n\");return nv_none();}\n");
     fprintf(out,"static NvVal nv_dispatch_call(const char *name,NvVal *args,int argc,NvDict *kw){\n");
-    fprintf(out,"    if(strcmp(name,\"ecris\")==0) return nv_builtin_print(args,argc);\n");
+    fprintf(out,"    if(strcmp(name,\"print\")==0) return nv_builtin_print(args,argc);\n");
     fprintf(out,"    if(strcmp(name,\"demande\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[4096]; if(!fgets(b,sizeof(b),stdin))return nv_str(\"\"); b[strcspn(b,\"\\r\\n\")]=0; return nv_str(b); }\n");
     fprintf(out,"    if(strcmp(name,\"demande_entier\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_int(0); char *e=NULL; long long v=strtoll(b,&e,10); if(e==b)nv_throw(\"Un entier était attendu\"); return nv_int(v); }\n");
     fprintf(out,"    if(strcmp(name,\"demande_decimal\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_float(0); char *e=NULL; double v=strtod(b,&e); if(e==b)nv_throw(\"Un nombre décimal était attendu\"); return nv_float(v); }\n");
@@ -1003,8 +1003,8 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"    if(strcmp(name,\"ouvre\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"ouvre() attend un chemin texte\"); const char*m=\"r\"; if(argc>1&&args[1].kind==NV_STR){ if(strcmp(args[1].as.s,\"lecture\")==0)m=\"r\"; else if(strcmp(args[1].as.s,\"ecriture\")==0)m=\"w\"; else if(strcmp(args[1].as.s,\"ajout\")==0)m=\"a\"; else m=args[1].as.s;} FILE*f=fopen(args[0].as.s,m); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); return nv_file_value(f); }\n");
     fprintf(out,"    if(strcmp(name,\"lis_fichier\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"lis_fichier() attend un chemin texte\"); FILE*f=fopen(args[0].as.s,\"r\"); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); NvVal fv=nv_file_value(f); NvVal r=nv_file_read(fv); fclose(f); return r; }\n");
     fprintf(out,"    if(strcmp(name,\"ecris_fichier\")==0){ if(argc<2||args[0].kind!=NV_STR)nv_throw(\"ecris_fichier() attend un chemin et une valeur\"); FILE*f=fopen(args[0].as.s,\"w\"); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); NvVal fv=nv_file_value(f); nv_file_write(fv,args[1]); fclose(f); return nv_none(); }\n");
-    fprintf(out,"    if(strcmp(name,\"longueur\")==0){ if(argc<1)nv_throw(\"longueur() attend une valeur\"); return nv_int(nv_len(args[0])); }\n");
-    fprintf(out,"    if(strcmp(name,\"plage\")==0){ long long a=0,b=0,p=1; if(argc==1){b=(long long)nv_num(args[0]);} else if(argc>=2){a=(long long)nv_num(args[0]);b=(long long)nv_num(args[1]);if(argc>=3)p=(long long)nv_num(args[2]);} else nv_throw(\"plage() attend 1 à 3 arguments\"); if(p==0)nv_throw(\"Le pas de plage ne peut pas être zéro\"); NvVal l=nv_list_new(); if(p>0){for(long long i=a;i<b;i+=p)nv_list_append(l,nv_int(i));}else{for(long long i=a;i>b;i+=p)nv_list_append(l,nv_int(i));} return l;}\n");
+    fprintf(out,"    if(strcmp(name,\"len\")==0){ if(argc<1)nv_throw(\"len() attend une valeur\"); return nv_int(nv_len(args[0])); }\n");
+    fprintf(out,"    if(strcmp(name,\"range\")==0){ long long a=0,b=0,p=1; if(argc==1){b=(long long)nv_num(args[0]);} else if(argc>=2){a=(long long)nv_num(args[0]);b=(long long)nv_num(args[1]);if(argc>=3)p=(long long)nv_num(args[2]);} else nv_throw(\"range() attend 1 à 3 arguments\"); if(p==0)nv_throw(\"Le pas de range ne peut pas être zéro\"); NvVal l=nv_list_new(); if(p>0){for(long long i=a;i<b;i+=p)nv_list_append(l,nv_int(i));}else{for(long long i=a;i>b;i+=p)nv_list_append(l,nv_int(i));} return l;}\n");
     fprintf(out,"    if(strcmp(name,\"erreur\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"erreur() attend un texte\"); nv_throw(args[0].as.s); }\n");
     for(int i=0;i<func_count;i++) if(funcs[i].owner[0]=='\0') fprintf(out,"    if(strcmp(name,\"%s\")==0) return %s(args,argc,kw);\n",funcs[i].name,funcs[i].internal);
     for(int i=0;i<type_count;i++){
@@ -1032,7 +1032,7 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"retire\")==0){ if(argc<1)nv_throw(\"retire() attend une valeur\"); for(int i=0;i<self.as.list->len;i++){if(nv_same(self.as.list->items[i],args[0])){for(int j=i;j<self.as.list->len-1;j++)self.as.list->items[j]=self.as.list->items[j+1];self.as.list->len--;return nv_none();}} return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_DICT && strcmp(name,\"cles\")==0){ NvVal l=nv_list_new(); for(int i=0;i<self.as.dict->len;i++)nv_list_append(l,nv_str(self.as.dict->keys[i])); return l; }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"lis\")==0) return nv_file_read(self);\n");
-    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"ecris\")==0){ if(argc<1)nv_throw(\"fichier.ecris() attend une valeur\"); return nv_file_write(self,args[0]); }\n");
+    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"print\")==0){ if(argc<1)nv_throw(\"fichier.ecris() attend une valeur\"); return nv_file_write(self,args[0]); }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"ferme\")==0){ nv_file_close(self); return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_OBJ){\n");
     for(int i=0;i<func_count;i++) if(funcs[i].owner[0]){
@@ -1107,7 +1107,7 @@ static void compile_source(FILE*in,const char*cfile){
         }
 
         /* Transitions sinon/sinonsi/capture/toujours. */
-        if((strncmp(s,"sinon:",6)==0 || strncmp(s,"sinonsi ",8)==0) && top_block() && top_block()->indent==indent && top_block()->kind==BLK_IF){close_one_block();}
+        if((strncmp(s,"else:",5)==0 || strncmp(s,"elif ",5)==0) && top_block() && top_block()->indent==indent && top_block()->kind==BLK_IF){close_one_block();}
         if(strncmp(s,"capture ",8)==0 && top_block() && top_block()->indent==indent && top_block()->kind==BLK_TRY){
             Block tb=blocks[--block_count];FILE*out=out_for_kind(tb.out_kind);emit_indent(out,indent);fprintf(out,"nv_try_top = __try%d.prev;\n",tb.try_id);emit_indent(out,indent);fprintf(out,"} else {\n");emit_indent(out,indent+4);fprintf(out,"nv_try_top = __try%d.prev;\n",tb.try_id);
             char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+8));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';char*vn=trim(name);emit_indent(out,indent+4);fprintf(out,"NvVal %s = nv_str(nv_error_message);\n",vn);VarScope*sc=(current_output()==OUT_FUNC)?&func_scope:&main_scope;scope_add(sc,vn);push_block(BLK_CATCH,indent,tb.out_kind,NULL,tb.try_id);continue;
@@ -1166,25 +1166,25 @@ static void compile_source(FILE*in,const char*cfile){
 
 
         /* contrôle de boucle */
-        if(strcmp(s,"arrete")==0 || strcmp(s,"suivant")==0){
+        if(strcmp(s,"break")==0 || strcmp(s,"continue")==0){
             int loop=0; for(int bi=block_count-1;bi>=0;bi--){if(blocks[bi].kind==BLK_FOR||blocks[bi].kind==BLK_WHILE){loop=1;break;}}
             if(!loop)die("Erreur ligne %d : '%s' doit être utilisé dans une boucle",lineno,s);
-            emit_indent(out,indent); fprintf(out,strcmp(s,"arrete")==0?"break;\n":"continue;\n"); continue;
+            emit_indent(out,indent); fprintf(out,strcmp(s,"break")==0?"break;\n":"continue;\n"); continue;
         }
 
         /* retour */
-        if(strncmp(s,"retourne",8)==0 && (s[8]=='\0'||isspace((unsigned char)s[8]))){char*rest=trim(s+8);emit_indent(out,indent);if(*rest){char*e=compile_expr(rest,lineno);fprintf(out,"return %s;\n",e);free(e);}else fprintf(out,"return nv_none();\n");continue;}
+        if(strncmp(s,"return",6)==0 && (s[6]=='\0'||isspace((unsigned char)s[6]))){char*rest=trim(s+6);emit_indent(out,indent);if(*rest){char*e=compile_expr(rest,lineno);fprintf(out,"return %s;\n",e);free(e);}else fprintf(out,"return nv_none();\n");continue;}
 
         /* si / sinonsi / sinon */
-        if(strncmp(s,"si ",3)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après si",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-4,s+3);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
-        if(strncmp(s,"sinonsi ",8)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après sinonsi",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-9,s+8);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"else if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
-        if(strcmp(s,"sinon:")==0){emit_indent(out,indent);fprintf(out,"else {\n");push_block(BLK_IF,indent,ok,NULL,0);continue;}
+        if(strncmp(s,"if ",3)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après if",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-4,s+3);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
+        if(strncmp(s,"elif ",5)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après elif",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-6,s+5);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"else if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
+        if(strcmp(s,"else:")==0){emit_indent(out,indent);fprintf(out,"else {\n");push_block(BLK_IF,indent,ok,NULL,0);continue;}
 
         /* tantque */
-        if(strncmp(s,"tantque ",8)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après tantque",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-9,s+8);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"while (nv_truth(%s)) {\n",e);free(e);push_block(BLK_WHILE,indent,ok,NULL,0);continue;}
+        if(strncmp(s,"while ",6)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après while",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-7,s+6);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"while (nv_truth(%s)) {\n",e);free(e);push_block(BLK_WHILE,indent,ok,NULL,0);continue;}
 
         /* pour x dans expr */
-        if(strncmp(s,"pour ",5)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après pour",lineno);char tmp[MAX_LINE];snprintf(tmp,sizeof(tmp),"%.*s",(int)n-6,s+5);char*din=strstr(tmp," dans ");if(!din)die("Erreur ligne %d : 'dans' attendu",lineno);*din='\0';char*vn=trim(tmp);char*iter=trim(din+6);if(!is_ident(vn))die("Erreur ligne %d : variable de boucle invalide",lineno);char*ie=compile_expr(iter,lineno);int id=lineno;emit_indent(out,indent);fprintf(out,"{ NvVal __iter%d = %s; for (int __i%d=0; __i%d<nv_len(__iter%d); __i%d++) {\n",id,ie,id,id,id,id);free(ie);emit_indent(out,indent+4);if(!scope_has(scope,vn)){fprintf(out,"NvVal %s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);scope_add(scope,vn);}else fprintf(out,"%s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);push_block(BLK_FOR,indent,ok,NULL,0);continue;}
+        if(strncmp(s,"for ",4)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après for",lineno);char tmp[MAX_LINE];snprintf(tmp,sizeof(tmp),"%.*s",(int)n-5,s+4);char*din=strstr(tmp," in ");if(!din)die("Erreur ligne %d : 'in' attendu",lineno);*din='\0';char*vn=trim(tmp);char*iter=trim(din+4);if(!is_ident(vn))die("Erreur ligne %d : variable de boucle invalide",lineno);char*ie=compile_expr(iter,lineno);int id=lineno;emit_indent(out,indent);fprintf(out,"{ NvVal __iter%d = %s; for (int __i%d=0; __i%d<nv_len(__iter%d); __i%d++) {\n",id,ie,id,id,id,id);free(ie);emit_indent(out,indent+4);if(!scope_has(scope,vn)){fprintf(out,"NvVal %s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);scope_add(scope,vn);}else fprintf(out,"%s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);push_block(BLK_FOR,indent,ok,NULL,0);continue;}
 
         /* tente */
         if(strcmp(s,"tente:")==0){int id=++try_counter;emit_indent(out,indent);fprintf(out,"NvTryFrame __try%d; __try%d.prev=nv_try_top; nv_try_top=&__try%d; if (setjmp(__try%d.env)==0) {\n",id,id,id,id);push_block(BLK_TRY,indent,ok,NULL,id);continue;}

@@ -1,5 +1,5 @@
 texte = "Clariox"
 
-ecris(texte[0])
-ecris(texte[1])
-ecris(texte[4])
+print(texte[0])
+print(texte[1])
+print(texte[4])

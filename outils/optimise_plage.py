@@ -5,7 +5,7 @@ import sys
 
 
 FOR_RANGE_RE = re.compile(
-    r'^(\s*)pour\s+([A-Za-z_][A-Za-z0-9_]*)\s+dans\s+plage\((.*)\)\s*:\s*$'
+    r'^(\s*)for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+range\((.*)\)\s*:\s*$'
 )
 
 
@@ -129,7 +129,7 @@ def transform(lines):
 
         # Pour l'instant on ne réécrit pas une boucle contenant continue.
         if any(
-            re.match(r'^\s*(continue|suivant)\b', x)
+            re.match(r'^\s*(continue|continue)\b', x)
             for x in body
         ):
             output.append(line)
@@ -153,7 +153,7 @@ def transform(lines):
             start, stop, step = args
             direction = step_direction(step)
 
-            # Pas dynamique ou nul : garde plage() classique.
+            # Pas dynamique ou nul : garde range() classique.
             if direction is None or direction == 0:
                 output.append(line)
                 output.extend(transform(body))
@@ -178,7 +178,7 @@ def transform(lines):
         else:
             condition = f"{index_name} > {stop_name}"
 
-        output.append(f"{spaces}tantque {condition}:\n")
+        output.append(f"{spaces}while {condition}:\n")
         output.append(f"{body_indent}{variable} = {index_name}\n")
 
         transformed_body = transform(body)

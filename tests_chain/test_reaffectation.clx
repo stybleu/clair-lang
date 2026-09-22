@@ -1,8 +1,8 @@
 texte = "Alice"
-ecris(texte)
+print(texte)
 
 texte = "Alexandria"
-ecris(texte)
+print(texte)
 
 texte = "Clariox"
-ecris(texte)
+print(texte)
