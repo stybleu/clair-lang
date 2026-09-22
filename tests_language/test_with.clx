@@ -1,0 +1,4 @@
+with file = ouvre("clariox_with_test.txt", "ecriture"):
+    file.write("Clariox")
+
+print("With OK")

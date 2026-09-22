@@ -1,0 +1,6 @@
+try:
+    erreur("boom")
+catch problem:
+    print("Caught:", problem)
+finally:
+    print("Finally")

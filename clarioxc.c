@@ -1032,7 +1032,7 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"retire\")==0){ if(argc<1)nv_throw(\"retire() attend une valeur\"); for(int i=0;i<self.as.list->len;i++){if(nv_same(self.as.list->items[i],args[0])){for(int j=i;j<self.as.list->len-1;j++)self.as.list->items[j]=self.as.list->items[j+1];self.as.list->len--;return nv_none();}} return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_DICT && strcmp(name,\"cles\")==0){ NvVal l=nv_list_new(); for(int i=0;i<self.as.dict->len;i++)nv_list_append(l,nv_str(self.as.dict->keys[i])); return l; }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"lis\")==0) return nv_file_read(self);\n");
-    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"print\")==0){ if(argc<1)nv_throw(\"fichier.ecris() attend une valeur\"); return nv_file_write(self,args[0]); }\n");
+    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"write\")==0){ if(argc<1)nv_throw(\"file.write() attend une valeur\"); return nv_file_write(self,args[0]); }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"ferme\")==0){ nv_file_close(self); return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_OBJ){\n");
     for(int i=0;i<func_count;i++) if(funcs[i].owner[0]){
@@ -1090,29 +1090,29 @@ static void compile_source(FILE*in,const char*cfile){
         close_blocks_above_indent(indent);
 
         /* Transitions de selon/cas. */
-        if(strncmp(s,"cas ",4)==0){
+        if(strncmp(s,"case ",5)==0){
             if(top_block() && top_block()->kind==BLK_CASE && top_block()->indent==indent) close_one_block();
             Block *mb=NULL; for(int bi=block_count-1;bi>=0;bi--){if(blocks[bi].kind==BLK_MATCH && blocks[bi].indent==indent-4){mb=&blocks[bi];break;}}
-            if(!mb)die("Erreur ligne %d : 'cas' doit être placé dans un bloc selon",lineno);
-            size_t sn=strlen(s); if(s[sn-1]!=':')die("Erreur ligne %d : ':' attendu après cas",lineno);
-            char ce[MAX_LINE]; snprintf(ce,sizeof(ce),"%.*s",(int)sn-5,s+4); char *cv=compile_expr(trim(ce),lineno);
+            if(!mb)die("Erreur ligne %d : 'case' doit être placé dans un bloc match",lineno);
+            size_t sn=strlen(s); if(s[sn-1]!=':')die("Erreur ligne %d : ':' attendu après casee",lineno);
+            char ce[MAX_LINE]; snprintf(ce,sizeof(ce),"%.*s",(int)sn-6,s+5); char *cv=compile_expr(trim(ce),lineno);
             FILE *mo=out_for_kind(mb->out_kind); emit_indent(mo,indent);
-            fprintf(mo,mb->case_count?"else if (nv_truth(nv_eq(__selon%d, %s))) {\n":"if (nv_truth(nv_eq(__selon%d, %s))) {\n",mb->try_id,cv);
+            fprintf(mo,mb->case_count?"else if (nv_truth(nv_eq(__match%d, %s))) {\n":"if (nv_truth(nv_eq(__match%d, %s))) {\n",mb->try_id,cv);
             free(cv); mb->case_count++; push_block(BLK_CASE,indent,mb->out_kind,NULL,0); continue;
         }
-        if(strcmp(s,"sinon:")==0 && top_block() && top_block()->kind==BLK_CASE && top_block()->indent==indent){
+        if(strcmp(s,"else:")==0 && top_block() && top_block()->kind==BLK_CASE && top_block()->indent==indent){
             close_one_block(); Block *mb=NULL; for(int bi=block_count-1;bi>=0;bi--){if(blocks[bi].kind==BLK_MATCH && blocks[bi].indent==indent-4){mb=&blocks[bi];break;}}
-            if(!mb)die("Erreur ligne %d : sinon de selon sans bloc selon",lineno);
+            if(!mb)die("Erreur ligne %d : else de match sans bloc match",lineno);
             FILE *mo=out_for_kind(mb->out_kind); emit_indent(mo,indent); fprintf(mo,"else {\n"); mb->case_count++; push_block(BLK_CASE,indent,mb->out_kind,NULL,0); continue;
         }
 
         /* Transitions sinon/sinonsi/capture/toujours. */
         if((strncmp(s,"else:",5)==0 || strncmp(s,"elif ",5)==0) && top_block() && top_block()->indent==indent && top_block()->kind==BLK_IF){close_one_block();}
-        if(strncmp(s,"capture ",8)==0 && top_block() && top_block()->indent==indent && top_block()->kind==BLK_TRY){
+        if(strncmp(s,"catch ",6)==0 && top_block() && top_block()->indent==indent && top_block()->kind==BLK_TRY){
             Block tb=blocks[--block_count];FILE*out=out_for_kind(tb.out_kind);emit_indent(out,indent);fprintf(out,"nv_try_top = __try%d.prev;\n",tb.try_id);emit_indent(out,indent);fprintf(out,"} else {\n");emit_indent(out,indent+4);fprintf(out,"nv_try_top = __try%d.prev;\n",tb.try_id);
-            char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+8));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';char*vn=trim(name);emit_indent(out,indent+4);fprintf(out,"NvVal %s = nv_str(nv_error_message);\n",vn);VarScope*sc=(current_output()==OUT_FUNC)?&func_scope:&main_scope;scope_add(sc,vn);push_block(BLK_CATCH,indent,tb.out_kind,NULL,tb.try_id);continue;
+            char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+6));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';char*vn=trim(name);emit_indent(out,indent+4);fprintf(out,"NvVal %s = nv_str(nv_error_message);\n",vn);VarScope*sc=(current_output()==OUT_FUNC)?&func_scope:&main_scope;scope_add(sc,vn);push_block(BLK_CATCH,indent,tb.out_kind,NULL,tb.try_id);continue;
         }
-        if(strcmp(s,"toujours:")==0 && top_block() && top_block()->indent==indent && top_block()->kind==BLK_CATCH){OutKind ok=top_block()->out_kind;close_one_block();FILE*out=out_for_kind(ok);emit_indent(out,indent);fprintf(out,"{\n");push_block(BLK_ALWAYS,indent,ok,NULL,0);continue;}
+        if(strcmp(s,"finally:")==0 && top_block() && top_block()->indent==indent && top_block()->kind==BLK_CATCH){OutKind ok=top_block()->out_kind;close_one_block();FILE*out=out_for_kind(ok);emit_indent(out,indent);fprintf(out,"{\n");push_block(BLK_ALWAYS,indent,ok,NULL,0);continue;}
 
         /* À même niveau, fermer le bloc précédent. Les conteneurs objet/structure
            restent ouverts pendant leurs membres indentés, mais se ferment dès
@@ -1120,8 +1120,8 @@ static void compile_source(FILE*in,const char*cfile){
         while(top_block() && top_block()->indent==indent) close_one_block();
 
         /* Définition de structure / objet */
-        if(indent==0 && strncmp(s,"structure ",10)==0){char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+10));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';if(!is_ident(trim(name)))die("Erreur ligne %d : nom de structure invalide",lineno);register_type(trim(name),TYPE_STRUCTURE);push_block(BLK_STRUCTURE,0,OUT_NONE,trim(name),0);continue;}
-        if(indent==0 && strncmp(s,"objet ",6)==0){char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+6));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';if(!is_ident(trim(name)))die("Erreur ligne %d : nom d'objet invalide",lineno);register_type(trim(name),TYPE_OBJECT);push_block(BLK_OBJECT,0,OUT_NONE,trim(name),0);continue;}
+        if(indent==0 && strncmp(s,"struct ",7)==0){char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+7));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';if(!is_ident(trim(name)))die("Erreur ligne %d : nom de struct invalide",lineno);register_type(trim(name),TYPE_STRUCTURE);push_block(BLK_STRUCTURE,0,OUT_NONE,trim(name),0);continue;}
+        if(indent==0 && strncmp(s,"object ",7)==0){char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+7));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';if(!is_ident(trim(name)))die("Erreur ligne %d : nom d'object invalide",lineno);register_type(trim(name),TYPE_OBJECT);push_block(BLK_OBJECT,0,OUT_NONE,trim(name),0);continue;}
 
         /* Champ dans structure/objet */
         TypeMeta*ct=current_type_meta();
@@ -1138,27 +1138,27 @@ static void compile_source(FILE*in,const char*cfile){
         VarScope*consts=(ok==OUT_FUNC)?&func_consts:&main_consts;
 
         /* valeur fixe */
-        if(strncmp(s,"fixe ",5)==0){
-            char rest[MAX_LINE]; snprintf(rest,sizeof(rest),"%s",trim(s+5)); int ol=0; int ap=find_top_level_assignment(rest,&ol);
-            if(ap<0||ol!=1)die("Erreur ligne %d : utilise 'fixe nom = valeur'",lineno);
+        if(strncmp(s,"const ",6)==0){
+            char rest[MAX_LINE]; snprintf(rest,sizeof(rest),"%s",trim(s+6)); int ol=0; int ap=find_top_level_assignment(rest,&ol);
+            if(ap<0||ol!=1)die("Erreur ligne %d : utilise 'const nom = valeur'",lineno);
             char lhs[MAX_LINE],rhs[MAX_LINE]; snprintf(lhs,sizeof(lhs),"%.*s",ap,rest); snprintf(rhs,sizeof(rhs),"%s",rest+ap+1);
             char nbuf[MAX_NAME]; snprintf(nbuf,sizeof(nbuf),"%s",trim(lhs)); char *col=strchr(nbuf,':'); if(col)*col='\0'; char *vn=trim(nbuf);
-            if(!is_ident(vn))die("Erreur ligne %d : nom fixe invalide",lineno);
+            if(!is_ident(vn))die("Erreur ligne %d : nom const invalide",lineno);
             emit_set_lvalue(out,indent,trim(lhs),trim(rhs),lineno,scope,NULL,NULL); scope_add(consts,vn); continue;
         }
 
         /* selon / cas */
-        if(strncmp(s,"selon ",6)==0){
-            size_t n=strlen(s); if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après selon",lineno);
+        if(strncmp(s,"match ",6)==0){
+            size_t n=strlen(s); if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après match",lineno);
             char ex[MAX_LINE]; snprintf(ex,sizeof(ex),"%.*s",(int)n-7,s+6); char *e=compile_expr(trim(ex),lineno); int id=++try_counter;
-            emit_indent(out,indent); fprintf(out,"{ NvVal __selon%d = %s;\n",id,e); free(e); push_block(BLK_MATCH,indent,ok,NULL,id); continue;
+            emit_indent(out,indent); fprintf(out,"{ NvVal __match%d = %s;\n",id,e); free(e); push_block(BLK_MATCH,indent,ok,NULL,id); continue;
         }
 
         /* avec ferme automatiquement un fichier à la fin normale du bloc */
-        if(strncmp(s,"avec ",5)==0){
-            size_t n=strlen(s); if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après avec",lineno);
+        if(strncmp(s,"with ",5)==0){
+            size_t n=strlen(s); if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après with",lineno);
             char body[MAX_LINE]; snprintf(body,sizeof(body),"%.*s",(int)n-6,s+5); int ol=0; int ap=find_top_level_assignment(body,&ol);
-            if(ap<0||ol!=1)die("Erreur ligne %d : utilise 'avec fichier = ouvre(...):'",lineno);
+            if(ap<0||ol!=1)die("Erreur ligne %d : utilise 'with fichier = ouvre(...):'",lineno);
             char lhs[MAX_NAME],rhs[MAX_LINE]; snprintf(lhs,sizeof(lhs),"%.*s",ap,body); snprintf(rhs,sizeof(rhs),"%s",body+ap+1); char *vn=trim(lhs);
             if(!is_ident(vn))die("Erreur ligne %d : nom de fichier invalide",lineno); char *e=compile_expr(trim(rhs),lineno);
             emit_indent(out,indent); fprintf(out,"{ NvVal %s = %s;\n",vn,e); free(e); scope_add(scope,vn); push_block(BLK_WITH,indent,ok,vn,0); continue;
@@ -1173,7 +1173,7 @@ static void compile_source(FILE*in,const char*cfile){
         }
 
         /* retour */
-        if(strncmp(s,"return",6)==0 && (s[6]=='\0'||isspace((unsigned char)s[6]))){char*rest=trim(s+6);emit_indent(out,indent);if(*rest){char*e=compile_expr(rest,lineno);fprintf(out,"return %s;\n",e);free(e);}else fprintf(out,"return nv_none();\n");continue;}
+        if(strncmp(s,"return",6)==0 && (s[6]=='\0'||isspace((unsigned char)s[6]))){char*rest=trim(s+7);emit_indent(out,indent);if(*rest){char*e=compile_expr(rest,lineno);fprintf(out,"return %s;\n",e);free(e);}else fprintf(out,"return nv_none();\n");continue;}
 
         /* si / sinonsi / sinon */
         if(strncmp(s,"if ",3)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après if",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-4,s+3);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
@@ -1187,7 +1187,7 @@ static void compile_source(FILE*in,const char*cfile){
         if(strncmp(s,"for ",4)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après for",lineno);char tmp[MAX_LINE];snprintf(tmp,sizeof(tmp),"%.*s",(int)n-5,s+4);char*din=strstr(tmp," in ");if(!din)die("Erreur ligne %d : 'in' attendu",lineno);*din='\0';char*vn=trim(tmp);char*iter=trim(din+4);if(!is_ident(vn))die("Erreur ligne %d : variable de boucle invalide",lineno);char*ie=compile_expr(iter,lineno);int id=lineno;emit_indent(out,indent);fprintf(out,"{ NvVal __iter%d = %s; for (int __i%d=0; __i%d<nv_len(__iter%d); __i%d++) {\n",id,ie,id,id,id,id);free(ie);emit_indent(out,indent+4);if(!scope_has(scope,vn)){fprintf(out,"NvVal %s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);scope_add(scope,vn);}else fprintf(out,"%s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);push_block(BLK_FOR,indent,ok,NULL,0);continue;}
 
         /* tente */
-        if(strcmp(s,"tente:")==0){int id=++try_counter;emit_indent(out,indent);fprintf(out,"NvTryFrame __try%d; __try%d.prev=nv_try_top; nv_try_top=&__try%d; if (setjmp(__try%d.env)==0) {\n",id,id,id,id);push_block(BLK_TRY,indent,ok,NULL,id);continue;}
+        if(strcmp(s,"try:")==0){int id=++try_counter;emit_indent(out,indent);fprintf(out,"NvTryFrame __try%d; __try%d.prev=nv_try_top; nv_try_top=&__try%d; if (setjmp(__try%d.env)==0) {\n",id,id,id,id);push_block(BLK_TRY,indent,ok,NULL,id);continue;}
 
         /* Affectation */
         int oplen=0;int apos=find_top_level_assignment(s,&oplen);if(apos>=0){char lhs[MAX_LINE],rhs[MAX_LINE];snprintf(lhs,sizeof(lhs),"%.*s",apos,s);snprintf(rhs,sizeof(rhs),"%s",s+apos+oplen);char aug[2]={0};if(oplen==2){aug[0]=s[apos];aug[1]='\0';}emit_set_lvalue(out,indent,trim(lhs),trim(rhs),lineno,scope,NULL,aug[0]?aug:NULL);continue;}
