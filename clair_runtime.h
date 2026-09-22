@@ -26,11 +26,50 @@ static char nv_error_message[1024] = {0};
 
 static void *nv_xmalloc(size_t n){ void *p=malloc(n?n:1); if(!p){fprintf(stderr,"Mémoire insuffisante\n"); exit(2);} return p;}
 static char *nv_strdup(const char *s){ size_t n=strlen(s)+1; char *p=nv_xmalloc(n); memcpy(p,s,n); return p;}
+/* NV_STRING_INTERN_V2 */
+typedef struct NvInternStr {
+    struct NvInternStr *next;
+    unsigned long long hash;
+    size_t len;
+    char data[];
+} NvInternStr;
+
+#define NV_INTERN_BUCKETS 4096
+static NvInternStr *nv_intern_table[NV_INTERN_BUCKETS] = {0};
+
+static unsigned long long nv_hash_text(const char *s,size_t n){
+    unsigned long long h=1469598103934665603ULL;
+    for(size_t i=0;i<n;i++){
+        h^=(unsigned char)s[i];
+        h*=1099511628211ULL;
+    }
+    return h;
+}
+
+static char *nv_intern(const char *s){
+    size_t n=strlen(s);
+    unsigned long long h=nv_hash_text(s,n);
+    size_t bucket=(size_t)(h%NV_INTERN_BUCKETS);
+
+    for(NvInternStr*p=nv_intern_table[bucket];p;p=p->next){
+        if(p->hash==h && p->len==n &&
+           memcmp(p->data,s,n+1)==0)
+            return p->data;
+    }
+
+    NvInternStr*p=(NvInternStr*)nv_xmalloc(sizeof(*p)+n+1);
+    p->hash=h;
+    p->len=n;
+    memcpy(p->data,s,n+1);
+    p->next=nv_intern_table[bucket];
+    nv_intern_table[bucket]=p;
+    return p->data;
+}
 static NvVal nv_none(void){ NvVal v; memset(&v,0,sizeof(v)); v.kind=NV_NONE; return v;}
 static NvVal nv_int(long long x){ NvVal v=nv_none(); v.kind=NV_INT; v.as.i=x; return v;}
 static NvVal nv_float(double x){ NvVal v=nv_none(); v.kind=NV_FLOAT; v.as.f=x; return v;}
 static NvVal nv_bool(int x){ NvVal v=nv_none(); v.kind=NV_BOOL; v.as.b=!!x; return v;}
-static NvVal nv_str(const char *x){ NvVal v=nv_none(); v.kind=NV_STR; v.as.s=nv_strdup(x); return v;}
+static NvVal nv_str(const char *x){ NvVal v=nv_none(); v.kind=NV_STR; v.as.s=nv_intern(x); return v;}
 static NvDict *nv_dict_new(void){ NvDict*d=nv_xmalloc(sizeof(*d)); d->keys=NULL; d->vals=NULL; d->len=0; d->cap=0; return d;}
 static NvVal nv_dict_new_value(void){ NvVal v=nv_none(); v.kind=NV_DICT; v.as.dict=nv_dict_new(); return v;}
 static NvVal nv_list_new(void){ NvVal v=nv_none(); v.kind=NV_LIST; v.as.list=nv_xmalloc(sizeof(NvList)); v.as.list->items=NULL; v.as.list->len=0; v.as.list->cap=0; return v;}
@@ -40,7 +79,7 @@ static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error
 static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,"Erreur Clair : %s\n",nv_error_message); exit(1);}
 static int nv_truth(NvVal v){ switch(v.kind){case NV_NONE:return 0;case NV_BOOL:return v.as.b;case NV_INT:return v.as.i!=0;case NV_FLOAT:return v.as.f!=0.0;case NV_STR:return v.as.s&&v.as.s[0];case NV_LIST:return v.as.list&&v.as.list->len>0;case NV_DICT:return v.as.dict&&v.as.dict->len>0;case NV_OBJ:return 1;case NV_FILE:return v.as.file!=NULL;} return 0;}
 static double nv_num(NvVal v){ if(v.kind==NV_INT)return(double)v.as.i; if(v.kind==NV_FLOAT)return v.as.f; if(v.kind==NV_BOOL)return(double)v.as.b; nv_throw("Une valeur numérique était attendue"); return 0;}
-static NvVal nv_add(NvVal a,NvVal b){ if(a.kind==NV_STR&&b.kind==NV_STR){size_t n=strlen(a.as.s)+strlen(b.as.s)+1;char*p=nv_xmalloc(n);snprintf(p,n,"%s%s",a.as.s,b.as.s);NvVal v=nv_none();v.kind=NV_STR;v.as.s=p;return v;} if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i+b.as.i); return nv_float(nv_num(a)+nv_num(b));}
+static NvVal nv_add(NvVal a,NvVal b){ if(a.kind==NV_STR&&b.kind==NV_STR){size_t n=strlen(a.as.s)+strlen(b.as.s)+1;char*p=nv_xmalloc(n);snprintf(p,n,"%s%s",a.as.s,b.as.s);NvVal v=nv_str(p);free(p);return v;} if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i+b.as.i); return nv_float(nv_num(a)+nv_num(b));}
 static NvVal nv_sub(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i-b.as.i); return nv_float(nv_num(a)-nv_num(b));}
 static NvVal nv_mul(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i*b.as.i); return nv_float(nv_num(a)*nv_num(b));}
 static NvVal nv_div(NvVal a,NvVal b){ double d=nv_num(b); if(d==0.0)nv_throw("Division par zéro"); return nv_float(nv_num(a)/d);}
@@ -78,7 +117,8 @@ static void nv_call_add(NvCall*c,NvVal v){if(c->argc==c->cap){c->cap=c->cap?c->c
 static void nv_call_spread(NvCall*c,NvVal v){if(v.kind!=NV_LIST)nv_throw("Le déballage * nécessite une liste");for(int i=0;i<v.as.list->len;i++)nv_call_add(c,v.as.list->items[i]);}
 static void nv_call_kw(NvCall*c,const char*k,NvVal v){nv_dict_set(c->kw,k,v);}
 static void nv_call_kwspread(NvCall*c,NvVal v){if(v.kind!=NV_DICT)nv_throw("Le déballage ** nécessite une table");for(int i=0;i<v.as.dict->len;i++)nv_dict_set(c->kw,v.as.dict->keys[i],v.as.dict->vals[i]);}
-static void nv_call_free(NvCall*c){free(c->args);}
+static void nv_dict_free_shallow(NvDict*d){if(!d)return;for(int i=0;i<d->len;i++)free(d->keys[i]);free(d->keys);free(d->vals);free(d);}
+static void nv_call_free(NvCall*c){if(!c)return;free(c->args);nv_dict_free_shallow(c->kw);c->args=NULL;c->kw=NULL;c->argc=0;c->cap=0;}
 static NvVal nv_arg(NvVal*args,int argc,NvDict*kw,int pos,const char*name){if(pos<argc)return args[pos];int i=nv_dict_find(kw,name);if(i>=0)return kw->vals[i];char buf[512];snprintf(buf,sizeof(buf),"Argument manquant : %s",name);nv_throw(buf);return nv_none();}
 static void nv_expect_type(NvVal v,const char*t,const char*name){int ok=0;if(strcmp(t,"entier")==0)ok=v.kind==NV_INT;else if(strcmp(t,"decimal")==0)ok=v.kind==NV_FLOAT||v.kind==NV_INT;else if(strcmp(t,"texte")==0)ok=v.kind==NV_STR;else if(strcmp(t,"booleen")==0)ok=v.kind==NV_BOOL;else if(strcmp(t,"liste")==0)ok=v.kind==NV_LIST;else if(strcmp(t,"table")==0)ok=v.kind==NV_DICT;else if(strcmp(t,"objet")==0)ok=v.kind==NV_OBJ;else if(strcmp(t,"fichier")==0)ok=v.kind==NV_FILE;else ok=1;if(!ok){char buf[512];snprintf(buf,sizeof(buf),"Type incorrect pour %s : %s attendu",name,t);nv_throw(buf);}}
 static NvVal nv_dispatch_call(const char*,NvVal*,int,NvDict*);

@@ -269,6 +269,163 @@ static void clair_string_assign_concat_many(
 }
 
 
+static void clair_string_append_char(
+    ClairString *dst,
+    ClairString ch
+) {
+    if (ch.len != 1) {
+        nv_throw(
+            "Un caractère était attendu"
+        );
+    }
+
+    /*
+     * Lire le caractère avant une éventuelle
+     * réallocation. Cela reste sûr même pour :
+     *
+     *     texte = texte + texte[i]
+     */
+    char value = ch.data[0];
+
+    long long old_len = dst->len;
+    long long needed = old_len + 1;
+
+    /*
+     * Cas rapide : buffer propriétaire avec
+     * suffisamment de capacité.
+     */
+    if (
+        dst->storage
+        && dst->storage->refs == 1
+        && dst->storage->cap >= needed
+    ) {
+        dst->storage->data[old_len] = value;
+        dst->storage->data[needed] = '\0';
+
+        dst->data = dst->storage->data;
+        dst->len = needed;
+
+        return;
+    }
+
+    /*
+     * Croissance géométrique :
+     *
+     * 16, 32, 64, 128...
+     *
+     * On évite ainsi de recopier toute la chaîne
+     * à chaque caractère ajouté.
+     */
+    long long cap = 16;
+
+    if (
+        dst->storage
+        && dst->storage->cap > cap
+    ) {
+        cap = dst->storage->cap;
+    }
+
+    while (cap < needed) {
+        long long next = cap * 2;
+
+        if (next <= cap) {
+            cap = needed;
+            break;
+        }
+
+        cap = next;
+    }
+
+    ClairStringStorage *storage = nv_xmalloc(
+        sizeof(ClairStringStorage)
+        + (size_t)cap
+        + 1
+    );
+
+    storage->refs = 1;
+    storage->cap = cap;
+
+    if (old_len > 0) {
+        memcpy(
+            storage->data,
+            dst->data,
+            (size_t)old_len
+        );
+    }
+
+    storage->data[old_len] = value;
+    storage->data[needed] = '\0';
+
+    clair_string_release(dst);
+
+    dst->storage = storage;
+    dst->data = storage->data;
+    dst->len = needed;
+}
+
+
+static void clair_string_assign_char(
+    ClairString *dst,
+    ClairString src,
+    long long index
+) {
+    if (index < 0) {
+        index = src.len + index;
+    }
+
+    if (index < 0 || index >= src.len) {
+        nv_throw("Indice de chaîne hors limites");
+    }
+
+    /*
+     * Lire le caractère AVANT toute modification de dst.
+     * Cela rend également sûr :
+     *
+     *     texte = texte[i]
+     */
+    char ch = src.data[index];
+
+    /*
+     * Réutiliser le buffer existant lorsqu'il appartient
+     * exclusivement à dst.
+     */
+    if (
+        dst->storage
+        && dst->storage->refs == 1
+        && dst->storage->cap >= 1
+    ) {
+        dst->storage->data[0] = ch;
+        dst->storage->data[1] = '\0';
+
+        dst->data = dst->storage->data;
+        dst->len = 1;
+
+        return;
+    }
+
+    /*
+     * Premier passage ou stockage partagé :
+     * créer un minuscule buffer propriétaire.
+     *
+     * Les affectations suivantes pourront le réutiliser.
+     */
+    clair_string_release(dst);
+
+    ClairStringStorage *storage = nv_xmalloc(
+        sizeof(ClairStringStorage) + 2
+    );
+
+    storage->refs = 1;
+    storage->cap = 1;
+    storage->data[0] = ch;
+    storage->data[1] = '\0';
+
+    dst->storage = storage;
+    dst->data = storage->data;
+    dst->len = 1;
+}
+
+
 static void clair_string_assign_move(
     ClairString *dst,
     ClairString src
@@ -295,12 +452,9 @@ static NvVal clair_string_box(
 
     buffer[s.len] = '\0';
 
-    /*
-     * On laisse volontairement le buffer vivant.
-     * Cela reste sûr même si nv_str conserve le pointeur.
-     * La gestion de propriété sera traitée plus tard.
-     */
-    return nv_str(buffer);
+    NvVal boxed = nv_str(buffer);
+    free(buffer);
+    return boxed;
 }
 '''
 
@@ -406,6 +560,113 @@ def literal_code(expr):
     )
 
 
+def native_index_code(expr):
+    """
+    Abaisse une expression entière utilisée comme indice
+    vers une expression C native.
+
+    Exemples :
+
+        i
+        3
+        -1
+        nv_int(5)
+        nv_neg(nv_int(1))
+        nv_mod(i, nv_int(source.len))
+    """
+    expr = strip_outer_parens(expr)
+
+    if re.fullmatch(
+        r'-?\d+(?:LL)?',
+        expr
+    ):
+        return expr
+
+    if re.fullmatch(
+        r'[A-Za-z_][A-Za-z0-9_]*',
+        expr
+    ):
+        return expr
+
+    if re.fullmatch(
+        r'[A-Za-z_][A-Za-z0-9_]*\.len',
+        expr
+    ):
+        return expr
+
+    # Cast C déjà présent.
+    m = re.fullmatch(
+        r'\(long long\)\s*(.+)',
+        expr,
+        re.S
+    )
+
+    if m:
+        return native_index_code(
+            m.group(1)
+        )
+
+    inner = unwrap(
+        expr,
+        "nv_int"
+    )
+
+    if inner is not None:
+        return native_index_code(inner)
+
+    inner = unwrap(
+        expr,
+        "nv_neg"
+    )
+
+    if inner is not None:
+        value = native_index_code(inner)
+
+        if value is None:
+            return None
+
+        return f"(-({value}))"
+
+    binary = {
+        "nv_add": "+",
+        "nv_sub": "-",
+        "nv_mul": "*",
+        "nv_mod": "%",
+    }
+
+    for function_name, operator in binary.items():
+        inner = unwrap(
+            expr,
+            function_name
+        )
+
+        if inner is None:
+            continue
+
+        args = split_top_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = native_index_code(args[0])
+        right = native_index_code(args[1])
+
+        if left is None or right is None:
+            return None
+
+        if operator == "%":
+            return (
+                f"((long long)({left}) % "
+                f"(long long)({right}))"
+            )
+
+        return (
+            f"(({left}) {operator} ({right}))"
+        )
+
+    return None
+
+
 def string_terms(expr, native):
     expr = strip_outer_parens(expr)
 
@@ -422,6 +683,40 @@ def string_terms(expr, native):
 
     if literal is not None:
         return [literal]
+
+    # Indexation d'une chaîne native.
+    index_inner = unwrap(
+        expr,
+        "nv_get_index"
+    )
+
+    if index_inner is not None:
+        args = split_top_args(index_inner)
+
+        if len(args) != 2:
+            return None
+
+        source = string_code(
+            args[0],
+            native
+        )
+
+        if source is None:
+            return None
+
+        index = native_index_code(
+            args[1]
+        )
+
+        if index is None:
+            return None
+
+        return [
+            "clair_string_char("
+            f"{source}, "
+            f"(long long)({index})"
+            ")"
+        ]
 
     inner = unwrap(expr, "nv_add")
 
@@ -612,6 +907,80 @@ def replace_length(line, name):
     )
 
 
+def native_string_index(expr, native):
+    expr = strip_outer_parens(expr)
+
+    inner = unwrap(
+        expr,
+        "nv_get_index"
+    )
+
+    if inner is None:
+        return None
+
+    args = split_top_args(inner)
+
+    if len(args) != 2:
+        return None
+
+    string = string_code(
+        args[0],
+        native
+    )
+
+    if string is None:
+        return None
+
+    index = native_index_code(
+        args[1]
+    )
+
+    if index is None:
+        return None
+
+    return string, index
+
+
+def replace_native_index_assignment(
+    line,
+    native
+):
+    m = re.match(
+        r'^(\s*)'
+        r'([A-Za-z_][A-Za-z0-9_]*)'
+        r'\s*=\s*(.*?)\s*;\s*$',
+        line
+    )
+
+    if not m:
+        return line
+
+    indent = m.group(1)
+    name = m.group(2)
+    rhs = m.group(3)
+
+    if name not in native:
+        return line
+
+    result = native_string_index(
+        rhs,
+        native
+    )
+
+    if result is None:
+        return line
+
+    string, index = result
+
+    return (
+        f"{indent}clair_string_assign_char("
+        f"&{name}, "
+        f"{string}, "
+        f"(long long)({index})"
+        f");\n"
+    )
+
+
 def replace_index_calls(line, native):
 
     def callback(inner):
@@ -628,25 +997,11 @@ def replace_index_calls(line, native):
         if string is None:
             return None
 
-        index = strip_outer_parens(
+        index = native_index_code(
             args[1]
         )
 
-        m = re.fullmatch(
-            r'nv_int\((.*?)\)',
-            index
-        )
-
-        if m:
-            index = m.group(1)
-
-        elif re.fullmatch(
-            r'[A-Za-z_][A-Za-z0-9_]*',
-            index
-        ):
-            pass
-
-        else:
+        if index is None:
             return None
 
         return (
@@ -664,36 +1019,226 @@ def replace_index_calls(line, native):
     )
 
 
-def replace_eq_calls(line, native):
+def discover_string_literals(lines):
+    """
+    Retrouve les littéraux générés par le compilateur :
+
+        clair_literal_2 = nv_str("A");
+
+    et permet ensuite de les utiliser comme ClairString
+    sans passer par NvVal.
+    """
+    literals = {}
+
+    pattern = re.compile(
+        r'^\s*'
+        r'(clair_literal_[A-Za-z0-9_]+)'
+        r'\s*=\s*'
+        r'nv_str\('
+        r'("(?:\\.|[^"\\])*")'
+        r'\)'
+        r'\s*;\s*$'
+    )
+
+    for line in lines:
+        m = pattern.match(line)
+
+        if m:
+            literals[m.group(1)] = m.group(2)
+
+    return literals
+
+
+def native_string_operand(expr, native, literals):
+    """
+    Convertit une expression qui représente une chaîne
+    vers son équivalent ClairString natif lorsque c'est sûr.
+    """
+    expr = strip_outer_parens(expr)
+
+    # Variable native ou littéral nv_str("...")
+    code = string_code(
+        expr,
+        native
+    )
+
+    if code is not None:
+        return code
+
+    # Littéraux pré-générés :
+    # clair_literal_2 -> clair_string_literal("A")
+    if expr in literals:
+        return (
+            "clair_string_literal("
+            f"{literals[expr]}"
+            ")"
+        )
+
+    # Une opération précédente a éventuellement produit :
+    #
+    # clair_string_box(
+    #     clair_string_char(...)
+    # )
+    #
+    # Dans une comparaison de chaînes, le boxing est inutile.
+    inner = unwrap(
+        expr,
+        "clair_string_box"
+    )
+
+    if inner is not None:
+        inner = strip_outer_parens(inner)
+
+        code = string_code(
+            inner,
+            native
+        )
+
+        if code is not None:
+            return code
+
+        # Expressions ClairString produites directement
+        # par l'optimiseur.
+        native_functions = (
+            "clair_string_char",
+            "clair_string_concat_many",
+            "clair_string_literal",
+            "clair_string_copy",
+        )
+
+        for function_name in native_functions:
+            if unwrap(
+                inner,
+                function_name
+            ) is not None:
+                return inner
+
+    return None
+
+
+def replace_eq_calls(
+    line,
+    native,
+    literals
+):
+    """
+    Optimise les comparaisons de chaînes :
+
+        a == b
+        a != b
+
+    sans repasser par NvVal.
+    """
+
+    def make_callback(negate):
+
+        def callback(inner):
+            args = split_top_args(inner)
+
+            if len(args) != 2:
+                return None
+
+            a = native_string_operand(
+                args[0],
+                native,
+                literals
+            )
+
+            b = native_string_operand(
+                args[1],
+                native,
+                literals
+            )
+
+            if a is None or b is None:
+                return None
+
+            comparison = (
+                "clair_string_eq("
+                f"{a}, {b}"
+                ")"
+            )
+
+            if negate:
+                comparison = (
+                    f"!({comparison})"
+                )
+
+            return (
+                f"nv_bool({comparison})"
+            )
+
+        return callback
+
+    # ==
+    line = replace_balanced_calls(
+        line,
+        "nv_eq",
+        make_callback(False)
+    )
+
+    # !=
+    line = replace_balanced_calls(
+        line,
+        "nv_ne",
+        make_callback(True)
+    )
+
+    return line
+
+
+def replace_native_string_truth(line):
+    """
+    Supprime nv_truth(nv_bool(...)) lorsque la condition
+    provient d'une comparaison de chaînes native.
+
+    Supporte :
+
+        ==
+        !=
+    """
 
     def callback(inner):
-        args = split_top_args(inner)
+        expr = strip_outer_parens(inner)
 
-        if len(args) != 2:
+        bool_inner = unwrap(
+            expr,
+            "nv_bool"
+        )
+
+        if bool_inner is None:
             return None
 
-        a = string_code(
-            args[0],
-            native
+        bool_inner = strip_outer_parens(
+            bool_inner
         )
 
-        b = string_code(
-            args[1],
-            native
-        )
+        # ==
+        if unwrap(
+            bool_inner,
+            "clair_string_eq"
+        ) is not None:
+            return f"({bool_inner})"
 
-        if a is None or b is None:
-            return None
+        # != devient :
+        #
+        # !(clair_string_eq(...))
+        if bool_inner.startswith("!"):
+            negated = strip_outer_parens(
+                bool_inner[1:].strip()
+            )
 
-        return (
-            "nv_bool(clair_string_eq("
-            f"{a}, {b}"
-            "))"
-        )
+            if unwrap(
+                negated,
+                "clair_string_eq"
+            ) is not None:
+                return f"(!({negated}))"
+
+        return None
 
     return replace_balanced_calls(
         line,
-        "nv_eq",
+        "nv_truth",
         callback
     )
 
@@ -717,6 +1262,7 @@ def main():
         lines = f.readlines()
 
     native = discover_strings(lines)
+    string_literals = discover_string_literals(lines)
 
     if native:
         print(
@@ -819,6 +1365,12 @@ def main():
                 continue
 
             rhs = m_assign.group(2)
+            # CLAIR_NORMALISE_LONGUEUR_AVANT_STRING_CODE
+            # longueur(chaine_native) doit être abaissé avant
+            # l'analyse d'une indexation/concaténation.
+            for native_name in native:
+                rhs = replace_length(rhs, native_name)
+
             native_rhs = string_code(
                 rhs,
                 native
@@ -845,7 +1397,26 @@ def main():
                 native
             )
 
-            if terms is not None and len(terms) > 1:
+            append_char = (
+                terms is not None
+                and len(terms) == 2
+                and terms[0] == name
+                and unwrap(
+                    terms[1],
+                    "clair_string_char"
+                ) is not None
+            )
+
+            if append_char:
+                new_line = (
+                    f"{indent}"
+                    f"clair_string_append_char("
+                    f"&{name}, "
+                    f"{terms[1]}"
+                    f");\n"
+                )
+
+            elif terms is not None and len(terms) > 1:
                 new_line = (
                     f"{indent}"
                     f"clair_string_assign_concat_many("
@@ -855,6 +1426,7 @@ def main():
                     + f"}}, "
                     f"{len(terms)}LL);\n"
                 )
+
             else:
                 new_line = (
                     f"{indent}clair_string_assign_move("
@@ -869,6 +1441,11 @@ def main():
                 name
             )
 
+        new_line = replace_native_index_assignment(
+            new_line,
+            native
+        )
+
         new_line = replace_index_calls(
             new_line,
             native
@@ -876,7 +1453,12 @@ def main():
 
         new_line = replace_eq_calls(
             new_line,
-            native
+            native,
+            string_literals
+        )
+
+        new_line = replace_native_string_truth(
+            new_line
         )
 
         # Passage d'une chaîne native vers

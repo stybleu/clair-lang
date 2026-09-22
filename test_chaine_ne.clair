@@ -1,0 +1,10 @@
+texte = "Alice"
+somme = 0
+
+pour i dans plage(20000000):
+    indice = i % longueur(texte)
+
+    si texte[indice] != "A":
+        somme = somme + 1
+
+ecris("Somme :", somme)

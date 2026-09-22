@@ -1,0 +1,7 @@
+texte = "Alice"
+resultat = ""
+
+pour i dans plage(5):
+    resultat = resultat + texte[i]
+
+ecris("Resultat :", resultat)

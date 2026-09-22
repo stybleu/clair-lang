@@ -152,7 +152,7 @@ if [ -f "$CFILE" ]; then
         echo "[Clair] Analyse des types natifs"
 
         if python \
-            "$ROOT/outils/optimise_numeriques_c.py" \
+            "$ROOT/outils/optimise_numeriques_mixte_c.py" \
             "$NUMERIC_INPUT" \
             "$NATIVE_C"; then
 
