@@ -1,218 +1,424 @@
-CLARIOX v5 — prototype de langage francophone compilé vers C
-============================================================
+# CLARIOX
 
-Objectif
---------
-Clariox vise une syntaxe facile à lire pour un francophone, tout en produisant
-un programme C compilé nativement avec Clang.
+Clariox is a compiled programming language designed around a simple,
+readable syntax while targeting native performance.
 
-Chaîne actuelle :
+Source files use the .clx extension.
 
-    programme.clx
-        -> clarioxc
-        -> programme.c
+Compilation pipeline
+--------------------
+
+    program.clx
+        -> Clariox compiler
+        -> generated C
         -> Clang -O3
-        -> exécutable natif
+        -> native executable
 
-Le runtime est désormais séparé dans clariox_runtime.h afin que le fichier C
-généré reste beaucoup plus lisible.
+The runtime is separated into:
 
-Installation Termux
+    clariox_runtime.h
+
+The compiler itself is:
+
+    clarioxc.c
+
+The main command-line launcher is:
+
+    ./clariox
+
+
+Termux installation
 -------------------
-Depuis le dossier où l'archive a été extraite :
+
+From the extracted project directory:
 
     bash installer_termux.sh
 
-L'installateur copie Clariox dans ~/clariox pour éviter le problème noexec du
-dossier Android Download.
+The project is normally installed in:
 
-Compilation manuelle
---------------------
+    ~/clariox
 
-    cd ~/clariox
-    clang clarioxc.c -std=gnu11 -O2 -Wall -Wextra -o clarioxc
-    ./clarioxc demo.clx demo
+
+Basic compilation
+-----------------
+
+Compile a Clariox program:
+
+    ./clariox program.clx
+
+Then run the generated executable:
+
+    ./program
+
+Example:
+
+    ./clariox demo.clx
     ./demo
 
-Voir le C généré :
 
-    cat demo.c
+Variables
+---------
 
-Voir le runtime séparé :
+Variables do not require explicit type declarations:
 
-    less clariox_runtime.h
-
-Syntaxe prise en charge
------------------------
-
-Variables :
-
-    nom = "Alice"
+    name = "Alice"
     age = 25
-    temperature: decimal = 18.5
+    temperature = 18.5
 
-Valeurs fixes :
+Optional type annotations are supported:
 
-    fixe PI = 3.14159
+    age: int = 25
+    temperature: float = 18.5
+    name: str = "Alice"
 
-Une valeur fixe ne peut plus être réaffectée.
 
-Texte interpolé :
+Constants
+---------
 
-    ecris("Bonjour {nom}, tu as {age} ans")
+Use const:
 
-Conditions :
+    const PI = 3.14159
 
-    si age >= 18 et actif:
-        ecris("Autorisé")
-    sinonsi age == 17 ou invitation:
-        ecris("À vérifier")
-    sinon:
-        ecris("Refusé")
+A const value cannot be reassigned.
 
-Opérateurs logiques :
 
-    et
-    ou
-    non
+Built-in values
+---------------
 
-Boucles :
+    true
+    false
+    none
 
-    pour i dans 0..10:
-        ecris(i)
 
-    tantque compteur > 0:
-        compteur -= 1
+Output
+------
 
-Contrôle des boucles :
+    print("Hello")
+    print("Age:", 25)
 
-    arrete
-    suivant
 
-Appartenance :
+String interpolation
+--------------------
 
-    si 20 dans nombres:
-        ecris("Trouvé")
+    name = "Alice"
+    age = 25
 
-Fonctions :
+    print("Hello {name}, you are {age} years old")
 
-    fn addition(a: entier, b: entier) -> entier:
-        retourne a + b
 
-Listes :
+Conditions
+----------
 
-    nombres = [10, 20, 30]
-    nombres.ajoute(40)
-    nombres.retire(20)
-    ecris(nombres[0])
+    if age >= 18:
+        print("Adult")
+    elif age == 17:
+        print("Almost adult")
+    else:
+        print("Minor")
 
-Tables :
 
-    personne = {
-        "nom": "Alice",
+Logical operators
+-----------------
+
+    and
+    or
+    not
+
+Example:
+
+    if active and not blocked:
+        print("Access granted")
+
+    if admin or owner:
+        print("Authorized")
+
+
+Loops
+-----
+
+For loop:
+
+    for i in range(10):
+        print(i)
+
+Range with start and end:
+
+    for i in range(5, 10):
+        print(i)
+
+Range with step:
+
+    for i in range(0, 20, 2):
+        print(i)
+
+While loop:
+
+    counter = 5
+
+    while counter > 0:
+        print(counter)
+        counter -= 1
+
+
+Loop control
+------------
+
+    break
+    continue
+
+
+Membership
+----------
+
+    numbers = [10, 20, 30]
+
+    if 20 in numbers:
+        print("Found")
+
+
+Functions
+---------
+
+Functions use fn:
+
+    fn add(a: int, b: int) -> int:
+        return a + b
+
+    result = add(10, 20)
+    print(result)
+
+
+Lists
+-----
+
+    numbers = [10, 20, 30]
+
+    numbers.append(40)
+    numbers.remove(20)
+
+    print(numbers)
+    print(numbers[0])
+    print(len(numbers))
+
+
+Dictionaries
+------------
+
+    person = {
+        "name": "Alice",
         "age": 25
     }
 
-    ecris(personne["nom"])
-    ecris(personne.cles())
+    print(person["name"])
+    print(person.keys())
 
-Déballage :
 
-    resultat = addition(*[10, 20])
-    presente(**personne)
+Argument unpacking
+------------------
 
-Structure :
+List unpacking:
 
-    structure Position:
-        x: decimal
-        y: decimal
+    result = add(*[10, 20])
 
-    pos = Position(1.5, 2.5)
+Dictionary unpacking is also supported with:
 
-Objet :
+    **value
 
-    objet Joueur:
-        fn init(self, nom: texte, points: entier):
-            self.nom = nom
+
+Structures
+----------
+
+Structures contain fields but no methods:
+
+    struct Position:
+        x: float
+        y: float
+
+    position = Position(1.5, 2.5)
+
+
+Objects
+-------
+
+Objects can contain fields and methods:
+
+    object Player:
+        fn init(self, name: str, points: int):
+            self.name = name
             self.points = points
 
-        fn gagne(self, points: entier):
+        fn add_points(self, points: int):
             self.points += points
 
-Selon / cas :
+    player = Player("Alice", 100)
 
-    selon couleur:
-        cas "rouge":
-            ecris("Stop")
-        cas "vert":
-            ecris("Passe")
-        sinon:
-            ecris("Inconnu")
 
-Entrée clavier :
+Match / case
+------------
 
-    nom = demande("Ton nom ? ")
-    age = demande_entier("Ton âge ? ")
-    taille = demande_decimal("Ta taille ? ")
+    color = "green"
 
-Conversions :
+    match color:
+        case "red":
+            print("Stop")
+        case "green":
+            print("Go")
+        else:
+            print("Unknown")
 
-    entier("25")
-    decimal("18.5")
-    texte(25)
 
-Fichiers :
+Input
+-----
 
-    ecris_fichier("note.txt", "Bonjour")
-    contenu = lis_fichier("note.txt")
+Text input:
 
-Ou avec fermeture automatique :
+    name = input("Name: ")
 
-    avec fichier = ouvre("note.txt", "ecriture"):
-        fichier.ecris("Bonjour")
+Integer input:
 
-Modes disponibles pour ouvre() :
+    age = input_int("Age: ")
 
-    "lecture"
-    "ecriture"
-    "ajout"
+Floating-point input:
 
-Gestion des erreurs :
+    height = input_float("Height: ")
 
-    tente:
-        erreur("Problème")
-    capture probleme:
-        ecris("Erreur : {probleme}")
-    toujours:
-        ecris("Fin")
 
-Types actuellement reconnus
-----------------------------
+Conversions
+-----------
 
-    entier
-    decimal
-    texte
-    booleen
-    liste
-    table
-    objet
-    fichier
+    int("25")
+    float("18.5")
+    str(25)
 
-Le typage reste facultatif dans le code Clariox.
 
-Important sur les performances
-------------------------------
-Cette v5 compile bien en C natif avec Clang -O3, mais les valeurs utilisent
-encore un runtime dynamique NvVal pour rendre listes, tables et objets simples
-à implémenter. Elle n'a donc pas encore les performances maximales visées.
+Files
+-----
 
-La prochaine étape d'optimisation consistera à spécialiser automatiquement les
-variables connues :
+Write a complete file:
 
-    age = 25
+    write_file("note.txt", "Hello")
 
-pour produire directement quelque chose de proche de :
+Read a complete file:
 
-    long long age = 25;
+    content = read_file("note.txt")
+    print(content)
 
-sans NvVal lorsque le type est déterminé à la compilation.
+
+File objects
+------------
+
+Open a file:
+
+    file = open("note.txt", "read")
+
+Available modes:
+
+    "read"
+    "write"
+    "append"
+
+File methods:
+
+    file.read()
+    file.write("Hello")
+    file.close()
+
+
+Automatic file closing
+----------------------
+
+Use with:
+
+    with file = open("note.txt", "write"):
+        file.write("Hello from Clariox")
+
+
+Error handling
+--------------
+
+    try:
+        error("Example error")
+    catch problem:
+        print("Caught:", problem)
+    finally:
+        print("Finished")
+
+
+Supported type annotations
+--------------------------
+
+    int
+    float
+    str
+    bool
+    list
+    dict
+    object
+    file
+
+Type annotations are optional.
+
+
+Native optimization
+-------------------
+
+Clariox generates C and uses Clang with optimization enabled.
+
+The optimization pipeline currently includes specialization for:
+
+    numeric values
+    numeric functions
+    homogeneous numeric lists
+    strings
+    string literals
+    range loops
+
+When possible, dynamic NvVal values are replaced by native C values such as:
+
+    long long
+    double
+
+This reduces dynamic runtime overhead in optimized sections.
+
+
+Development tests
+-----------------
+
+Language tests are located in:
+
+    tests_language/
+
+String regression tests:
+
+    tests_chain/
+
+Structure regression tests:
+
+    tests_structures/
+
+Current validated language features include:
+
+    English control-flow syntax
+    English built-in API
+    English type annotations
+    list.append()
+    list.remove()
+    dict.keys()
+    file.read()
+    file.write()
+    file.close()
+    match / case
+    try / catch / finally
+    with
+    const
+    and / or / not
+
+
+Project
+-------
+
+Language: Clariox
+Source extension: .clx
+Compiler: clarioxc
+Backend: Clang
+Generated language: C
