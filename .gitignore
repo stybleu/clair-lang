@@ -107,3 +107,8 @@ __pycache__/
 /test_liste_lecture.c
 /test_table_ecriture.c
 /test_table_lecture.c
+
+# === Clariox generated root test artifacts ===
+/test_*.c
+/test_*
+!/*.clx

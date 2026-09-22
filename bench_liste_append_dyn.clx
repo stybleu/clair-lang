@@ -1,12 +1,12 @@
 nombres = [0]
 
-clair_range_index_1 = 0
-clair_range_fin_1 = 1000000
-clair_range_pas_1 = 1
-tantque clair_range_index_1 < clair_range_fin_1:
-    i = clair_range_index_1
-    nombres.ajoute(50)
+clariox_range_index_1 = 0
+clariox_range_fin_1 = 1000000
+clariox_range_pas_1 = 1
+while clariox_range_index_1 < clariox_range_fin_1:
+    i = clariox_range_index_1
+    nombres.append(50)
 
-    clair_range_index_1 = clair_range_index_1 + clair_range_pas_1
-ecris("Longueur :", longueur(nombres))
-ecris("Dernier :", nombres[1000000])
+    clariox_range_index_1 = clariox_range_index_1 + clariox_range_pas_1
+print("Longueur :", len(nombres))
+print("Dernier :", nombres[1000000])

@@ -2,8 +2,8 @@ nom = "Alice"
 cible = "Alice"
 compteur = 0
 
-pour i dans plage(100000000):
-    si nom == cible:
+for i in range(100000000):
+    if nom == cible:
         compteur = compteur + 1
 
-ecris(compteur)
+print(compteur)

@@ -1,10 +1,10 @@
 nombres = [10, 20, 30, 40]
 
-ecris("Premier :", nombres[0])
-ecris("Troisieme :", nombres[2])
+print("Premier :", nombres[0])
+print("Troisieme :", nombres[2])
 
-nombres.ajoute(50)
+nombres.append(50)
 
-ecris("Longueur :", longueur(nombres))
-ecris("Dernier :", nombres[4])
-ecris("Liste :", nombres)
+print("Longueur :", len(nombres))
+print("Dernier :", nombres[4])
+print("Liste :", nombres)

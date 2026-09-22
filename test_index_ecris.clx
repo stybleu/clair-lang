@@ -1,4 +1,4 @@
 texte = "Alice"
 
-pour i dans plage(5):
-    ecris(texte[i])
+for i in range(5):
+    print(texte[i])

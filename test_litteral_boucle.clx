@@ -1,8 +1,8 @@
 nom = "Alice"
 compteur = 0
 
-pour i dans plage(100000000):
-    si nom == "Alice":
+for i in range(100000000):
+    if nom == "Alice":
         compteur = compteur + 1
 
-ecris(compteur)
+print(compteur)

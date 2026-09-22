@@ -1,13 +1,13 @@
 nom = "Alice"
 compteur = 0
 
-clair_range_index_1 = 0
-clair_range_fin_1 = 100000000
-clair_range_pas_1 = 1
-tantque clair_range_index_1 < clair_range_fin_1:
-    i = clair_range_index_1
-    si nom == "Alice":
+clariox_range_index_1 = 0
+clariox_range_fin_1 = 100000000
+clariox_range_pas_1 = 1
+while clariox_range_index_1 < clariox_range_fin_1:
+    i = clariox_range_index_1
+    if nom == "Alice":
         compteur = compteur + 1
 
-    clair_range_index_1 = clair_range_index_1 + clair_range_pas_1
-ecris(compteur)
+    clariox_range_index_1 = clariox_range_index_1 + clariox_range_pas_1
+print(compteur)

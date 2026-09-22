@@ -6,16 +6,16 @@ d = "andria"
 texte = ""
 somme = 0
 
-pour i dans plage(20000000):
-    si i % 2 == 0:
+for i in range(20000000):
+    if i % 2 == 0:
         texte = a + b
-    sinon:
+    else:
         texte = c + d
 
-    indice = i % longueur(texte)
+    indice = i % len(texte)
 
-    si texte[indice] == "A":
+    if texte[indice] == "A":
         somme = somme + 1
 
-ecris("Somme :", somme)
-ecris("Final :", texte)
+print("Somme :", somme)
+print("Final :", texte)

@@ -1,8 +1,8 @@
 texte = "Alice"
 caractere = ""
 
-pour i dans plage(20000000):
-    indice = i % longueur(texte)
+for i in range(20000000):
+    indice = i % len(texte)
     caractere = texte[indice]
 
-ecris("Final :", caractere)
+print("Final :", caractere)

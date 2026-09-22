@@ -1,6 +1,6 @@
 x = 1
 
-pour i dans plage(10000000):
+for i in range(10000000):
     x = (x * 3 + i) % 1000000007
 
-ecris(x)
+print(x)

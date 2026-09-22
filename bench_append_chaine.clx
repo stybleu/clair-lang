@@ -1,9 +1,9 @@
 source = "ABCDE"
 resultat = ""
 
-pour i dans plage(5000000):
-    resultat = resultat + source[i % longueur(source)]
+for i in range(5000000):
+    resultat = resultat + source[i % len(source)]
 
-ecris("Longueur :", longueur(resultat))
-ecris("Premier :", resultat[0])
-ecris("Dernier :", resultat[-1])
+print("Longueur :", len(resultat))
+print("Premier :", resultat[0])
+print("Dernier :", resultat[-1])

@@ -1,67 +1,67 @@
-utilise base
+use base
 
 # Clariox v5 - démonstration
 
-fixe VERSION = "5.0"
+const VERSION = "5.0"
 nom = "Alice"
 age = 26
 
-ecris("Clariox {VERSION} - Bonjour {nom}, tu as {age} ans")
+print("Clariox {VERSION} - Bonjour {nom}, tu as {age} ans")
 
 # Plage directe
-pour i dans 0..4:
-    ecris("i = {i}")
+for i in 0..4:
+    print("i = {i}")
 
-# Selon / cas
+# Selon / case
 couleur = "vert"
-selon couleur:
-    cas "rouge":
-        ecris("Stop")
-    cas "vert":
-        ecris("Passe")
-    sinon:
-        ecris("Couleur inconnue")
+match couleur:
+    case "rouge":
+        print("Stop")
+    case "vert":
+        print("Passe")
+    else:
+        print("Couleur inconnue")
 
 # Collections
 nombres = [10, 20, 30]
-nombres.ajoute(40)
-ecris("Liste :", nombres)
+nombres.append(40)
+print("Liste :", nombres)
 
 infos = {
     "nom": nom,
     "age": age
 }
-ecris("Table :", infos)
+print("Table :", infos)
 
 # Fonction + typage facultatif
-fn double(nombre: entier) -> entier:
-    retourne nombre * 2
+fn double(nombre: int) -> int:
+    return nombre * 2
 
-ecris("Double :", double(21))
+print("Double :", double(21))
 
-# Fichier avec fermeture automatique
-avec fichier = ouvre("clair_test.txt", "ecriture"):
-    fichier.ecris("Bonjour depuis Clariox")
+# Fichier with fermeture automatique
+with fichier = open("clariox_test.txt", "write"):
+    fichier.write("Bonjour depuis Clariox")
 
-contenu = lis_fichier("clair_test.txt")
-ecris("Fichier : {contenu}")
+contenu = read_file("clariox_test.txt")
+print("Fichier : {contenu}")
 
 # Erreurs
-tente:
-    erreur("Erreur volontaire")
-capture probleme:
-    ecris("Erreur capturée : {probleme}")
-toujours:
-    ecris("Toujours exécuté")
+try:
+    error("Erreur volontaire")
+catch probleme:
+    print("Erreur capturée : {probleme}")
+finally:
+    print("Toujours exécuté")
 
-# Appartenance avec "dans"
-si 20 dans nombres:
-    ecris("20 est dans la liste")
+# Appartenance with "dans"
+if 20 in nombres:
+    print("20 est dans la liste")
 
-# arrete / suivant
-pour j dans 0..6:
-    si j == 2:
-        suivant
-    si j == 5:
-        arrete
-    ecris("j = {j}")
+# break / continue
+for j in 0..6:
+    if j == 2:
+        continue
+    if j == 5:
+        break
+    print("j = {j}")

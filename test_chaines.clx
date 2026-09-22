@@ -3,10 +3,10 @@ nom = "Martin"
 
 complet = prenom + " " + nom
 
-ecris("Complet :", complet)
-ecris("Longueur :", longueur(complet))
+print("Complet :", complet)
+print("Longueur :", len(complet))
 
-si prenom == "Alice":
-    ecris("Comparaison OK")
+if prenom == "Alice":
+    print("Comparaison OK")
 
-ecris("Premier caractere :", prenom[0])
+print("Premier caractere :", prenom[0])

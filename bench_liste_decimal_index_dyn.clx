@@ -2,12 +2,12 @@ valeurs = [1.5, 2.5, 3.5, 4.5, 5.5]
 
 somme = 0.0
 
-clair_range_index_1 = 0
-clair_range_fin_1 = 100000000
-clair_range_pas_1 = 1
-tantque clair_range_index_1 < clair_range_fin_1:
-    i = clair_range_index_1
+clariox_range_index_1 = 0
+clariox_range_fin_1 = 100000000
+clariox_range_pas_1 = 1
+while clariox_range_index_1 < clariox_range_fin_1:
+    i = clariox_range_index_1
     somme = somme + valeurs[i % 5]
 
-    clair_range_index_1 = clair_range_index_1 + clair_range_pas_1
-ecris(somme)
+    clariox_range_index_1 = clariox_range_index_1 + clariox_range_pas_1
+print(somme)
