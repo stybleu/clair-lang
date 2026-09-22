@@ -563,7 +563,7 @@ def main():
 
     if specializations:
         print(
-            "[Clair OPT] Spécialisations numériques :"
+            "[Clariox OPT] Spécialisations numériques :"
         )
 
         for name, args, ret in sorted(
@@ -576,7 +576,7 @@ def main():
             )
     else:
         print(
-            "[Clair OPT] Aucune fonction "
+            "[Clariox OPT] Aucune fonction "
             "numérique spécialisée"
         )
 
@@ -584,7 +584,7 @@ def main():
         f.writelines(output)
 
     print(
-        "[Clair OPT] Inférence fonctions : "
+        "[Clariox OPT] Inférence fonctions : "
         f"{destination}"
     )
 

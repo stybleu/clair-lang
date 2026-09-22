@@ -1,9 +1,0 @@
-source = "ABCDE"
-resultat = ""
-
-pour i dans plage(5000000):
-    resultat = resultat + source[i % longueur(source)]
-
-ecris("Longueur :", longueur(resultat))
-ecris("Premier :", resultat[0])
-ecris("Dernier :", resultat[-1])

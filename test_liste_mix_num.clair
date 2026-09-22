@@ -1,8 +1,0 @@
-valeurs = [1, 2.5, 3]
-
-valeurs.ajoute(4)
-
-ecris("Liste :", valeurs)
-ecris("Premier :", valeurs[0])
-ecris("Deuxieme :", valeurs[1])
-ecris("Longueur :", longueur(valeurs))

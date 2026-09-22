@@ -248,7 +248,7 @@ def main():
 
     if functions:
         print(
-            "[Clair OPT] Fonctions numériques "
+            "[Clariox OPT] Fonctions numériques "
             "spécialisables :"
         )
 
@@ -263,7 +263,7 @@ def main():
             )
     else:
         print(
-            "[Clair OPT] Aucune fonction numérique "
+            "[Clariox OPT] Aucune fonction numérique "
             "spécialisable"
         )
 
@@ -276,7 +276,7 @@ def main():
         f.writelines(output)
 
     print(
-        "[Clair OPT] Spécialisation fonctions : "
+        "[Clariox OPT] Spécialisation fonctions : "
         f"{destination}"
     )
 

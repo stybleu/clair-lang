@@ -160,7 +160,7 @@ def convert_expr(expr, types):
 
         return f"({a[0]} {op} {b[0]})", typ
 
-    # Division Clair : toujours décimale
+    # Division Clariox : toujours décimale
     inner = unwrap(expr, "nv_div")
     if inner is not None:
         args = split_args(inner)
@@ -179,7 +179,7 @@ def convert_expr(expr, types):
             "double"
         )
 
-    # Modulo Clair : le runtime travaille en entier
+    # Modulo Clariox : le runtime travaille en entier
     inner = unwrap(expr, "nv_mod")
     if inner is not None:
         args = split_args(inner)
@@ -275,7 +275,7 @@ def main():
             break
 
     if main_index is None:
-        print("[Clair OPT] main() introuvable")
+        print("[Clariox OPT] main() introuvable")
         sys.exit(1)
 
     body = lines[main_index:]
@@ -386,7 +386,7 @@ def main():
         if not name.startswith("clair_range_"):
             types.pop(name, None)
 
-    print("[Clair OPT] Types natifs :")
+    print("[Clariox OPT] Types natifs :")
 
     for name in sorted(types):
         print(f"  {name} -> {types[name]}")
@@ -542,7 +542,7 @@ def main():
         f.writelines(output)
 
     print(
-        f"[Clair OPT] C numérique optimisé : "
+        f"[Clariox OPT] C numérique optimisé : "
         f"{destination}"
     )
 

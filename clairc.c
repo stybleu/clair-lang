@@ -674,7 +674,7 @@ static char *compile_expr(const char *src, int lineno) {
 }
 
 /* ============================
-   Runtime C Clair séparé dans clair_runtime.h
+   Runtime C Clariox séparé dans clair_runtime.h
    ============================ */
 
 static const char *RUNTIME_C =
@@ -753,8 +753,8 @@ static const char *RUNTIME_C =
 "static NvVal nv_list_new(void){ NvVal v=nv_none(); v.kind=NV_LIST; v.as.list=nv_xmalloc(sizeof(NvList)); v.as.list->items=NULL; v.as.list->len=0; v.as.list->cap=0; return v;}\n"
 "static NvVal nv_file_value(FILE *f){ NvVal v=nv_none(); v.kind=NV_FILE; v.as.file=f; return v;}\n"
 "static NvVal nv_to_str(NvVal v){ char b[256]; switch(v.kind){case NV_STR:return nv_str(v.as.s);case NV_NONE:return nv_str(\"rien\");case NV_INT:snprintf(b,sizeof(b),\"%lld\",v.as.i);return nv_str(b);case NV_FLOAT:snprintf(b,sizeof(b),\"%g\",v.as.f);return nv_str(b);case NV_BOOL:return nv_str(v.as.b?\"vrai\":\"faux\");case NV_LIST:return nv_str(\"<liste>\");case NV_DICT:return nv_str(\"<table>\");case NV_OBJ:snprintf(b,sizeof(b),\"<%s>\",v.as.obj->type);return nv_str(b);case NV_FILE:return nv_str(\"<fichier>\");}return nv_str(\"\");}\n"
-"static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error_message),\"%s\",msg); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Erreur Clair : %s\\n\",msg); exit(1);}\n"
-"static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Erreur Clair : %s\\n\",nv_error_message); exit(1);}\n"
+"static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error_message),\"%s\",msg); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Erreur Clariox : %s\\n\",msg); exit(1);}\n"
+"static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Erreur Clariox : %s\\n\",nv_error_message); exit(1);}\n"
 "static int nv_truth(NvVal v){ switch(v.kind){case NV_NONE:return 0;case NV_BOOL:return v.as.b;case NV_INT:return v.as.i!=0;case NV_FLOAT:return v.as.f!=0.0;case NV_STR:return v.as.s&&v.as.s[0];case NV_LIST:return v.as.list&&v.as.list->len>0;case NV_DICT:return v.as.dict&&v.as.dict->len>0;case NV_OBJ:return 1;case NV_FILE:return v.as.file!=NULL;} return 0;}\n"
 "static double nv_num(NvVal v){ if(v.kind==NV_INT)return(double)v.as.i; if(v.kind==NV_FLOAT)return v.as.f; if(v.kind==NV_BOOL)return(double)v.as.b; nv_throw(\"Une valeur numérique était attendue\"); return 0;}\n"
 "static NvVal nv_add(NvVal a,NvVal b){ if(a.kind==NV_STR&&b.kind==NV_STR){size_t n=strlen(a.as.s)+strlen(b.as.s)+1;char*p=nv_xmalloc(n);snprintf(p,n,\"%s%s\",a.as.s,b.as.s);NvVal v=nv_str(p);free(p);return v;} if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i+b.as.i); return nv_float(nv_num(a)+nv_num(b));}\n"
@@ -1212,13 +1212,13 @@ static void compile_source(FILE*in,const char*cfile){
 }
 
 int main(int argc,char**argv){
-    if(argc!=3){fprintf(stderr,"Usage : %s programme.clair sortie\n",argv[0]);return 1;}
+    if(argc!=3){fprintf(stderr,"Usage : %s programme.clx sortie\n",argv[0]);return 1;}
     if(!safe_filename(argv[1])||!safe_filename(argv[2])){fprintf(stderr,"Nom de fichier non autorisé\n");return 1;}
     FILE*in=fopen(argv[1],"r");if(!in){perror("source");return 1;}
     char cfile[512];snprintf(cfile,sizeof(cfile),"%s.c",argv[2]);
     compile_source(in,cfile);fclose(in);
     char cmd[1400];snprintf(cmd,sizeof(cmd),"clang -std=gnu11 -O3 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter '%s' -lm -o '%s'",cfile,argv[2]);
-    printf("[Clair] C généré : %s\n",cfile);printf("[Clair] Runtime séparé : clair_runtime.h\n");printf("[Clair] Compilation native avec Clang -O3...\n");
+    printf("[Clariox] C généré : %s\n",cfile);printf("[Clariox] Runtime séparé : clair_runtime.h\n");printf("[Clariox] Compilation native avec Clang -O3...\n");
     int rc=system(cmd);if(rc!=0){fprintf(stderr,"Échec de Clang. Le fichier C généré a été conservé pour diagnostic.\n");return 1;}
-    printf("[Clair] Exécutable créé : %s\n",argv[2]);return 0;
+    printf("[Clariox] Exécutable créé : %s\n",argv[2]);return 0;
 }

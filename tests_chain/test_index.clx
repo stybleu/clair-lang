@@ -1,4 +1,4 @@
-texte = "Clair"
+texte = "Clariox"
 
 ecris(texte[0])
 ecris(texte[1])

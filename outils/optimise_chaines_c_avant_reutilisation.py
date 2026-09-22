@@ -608,7 +608,7 @@ def main():
 
     if native:
         print(
-            "[Clair OPT] Chaînes natives :"
+            "[Clariox OPT] Chaînes natives :"
         )
 
         for name in native:
@@ -616,7 +616,7 @@ def main():
 
     else:
         print(
-            "[Clair OPT] Aucune chaîne "
+            "[Clariox OPT] Aucune chaîne "
             "spécialisable"
         )
 
@@ -785,7 +785,7 @@ def main():
         f.writelines(output)
 
     print(
-        "[Clair OPT] C chaînes optimisé : "
+        "[Clariox OPT] C chaînes optimisé : "
         f"{destination}"
     )
 

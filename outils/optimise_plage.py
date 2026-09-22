@@ -196,7 +196,7 @@ def transform(lines):
 
 def main():
     if len(sys.argv) != 3:
-        print("Usage : optimise_plage.py entree.clair sortie.clair")
+        print("Usage : optimise_plage.py entree.clx sortie.clx")
         sys.exit(2)
 
     source, destination = sys.argv[1], sys.argv[2]

@@ -4,5 +4,5 @@ ecris(texte)
 texte = "Alexandria"
 ecris(texte)
 
-texte = "Clair"
+texte = "Clariox"
 ecris(texte)

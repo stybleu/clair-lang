@@ -3,12 +3,12 @@ CLAIR v5 — prototype de langage francophone compilé vers C
 
 Objectif
 --------
-Clair vise une syntaxe facile à lire pour un francophone, tout en produisant
+Clariox vise une syntaxe facile à lire pour un francophone, tout en produisant
 un programme C compilé nativement avec Clang.
 
 Chaîne actuelle :
 
-    programme.clair
+    programme.clx
         -> clairc
         -> programme.c
         -> Clang -O3
@@ -23,15 +23,15 @@ Depuis le dossier où l'archive a été extraite :
 
     bash installer_termux.sh
 
-L'installateur copie Clair dans ~/clair pour éviter le problème noexec du
+L'installateur copie Clariox dans ~/clariox pour éviter le problème noexec du
 dossier Android Download.
 
 Compilation manuelle
 --------------------
 
-    cd ~/clair
+    cd ~/clariox
     clang clairc.c -std=gnu11 -O2 -Wall -Wextra -o clairc
-    ./clairc demo.clair demo
+    ./clairc demo.clx demo
     ./demo
 
 Voir le C généré :
@@ -198,7 +198,7 @@ Types actuellement reconnus
     objet
     fichier
 
-Le typage reste facultatif dans le code Clair.
+Le typage reste facultatif dans le code Clariox.
 
 Important sur les performances
 ------------------------------

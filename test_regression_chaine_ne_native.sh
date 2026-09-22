@@ -2,9 +2,9 @@
 
 set -e
 
-cd ~/clair
+cd ~/clariox
 
-./clair test_chaine_ne.clair >/dev/null
+./clariox test_chaine_ne.clx >/dev/null
 
 CFILE="$HOME/clair/test_chaine_ne.c"
 

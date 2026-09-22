@@ -167,7 +167,7 @@ def main():
             break
 
     if main_index is None:
-        print("[Clair OPT] main() introuvable")
+        print("[Clariox OPT] main() introuvable")
         sys.exit(1)
 
     native = set()
@@ -227,7 +227,7 @@ def main():
                 native.add(name)
 
     print(
-        "[Clair OPT] Entiers natifs détectés : "
+        "[Clariox OPT] Entiers natifs détectés : "
         + ", ".join(sorted(native))
     )
 
@@ -308,7 +308,7 @@ def main():
     with open(destination, "w", encoding="utf-8") as f:
         f.writelines(output)
 
-    print(f"[Clair OPT] C optimisé : {destination}")
+    print(f"[Clariox OPT] C optimisé : {destination}")
 
 
 if __name__ == "__main__":

@@ -452,13 +452,13 @@ def main():
             native[name] = info
 
     if native:
-        print("[Clair OPT] Listes entières natives :")
+        print("[Clariox OPT] Listes entières natives :")
 
         for name in sorted(native):
             print(f"  {name}")
     else:
         print(
-            "[Clair OPT] Aucune liste entière "
+            "[Clariox OPT] Aucune liste entière "
             "spécialisable"
         )
 
@@ -525,7 +525,7 @@ def main():
         f.writelines(output)
 
     print(
-        "[Clair OPT] Optimisation listes : "
+        "[Clariox OPT] Optimisation listes : "
         f"{destination}"
     )
 

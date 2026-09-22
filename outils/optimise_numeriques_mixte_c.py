@@ -465,6 +465,172 @@ def repair(lines):
             dict_set_callback
         )
 
+        # nv_set_index(table, index, valeur)
+        #
+        # Les arguments index et valeur doivent être des NvVal.
+        # Si l'optimiseur les a spécialisés en types C natifs,
+        # il faut les boxer avant l'appel au runtime.
+        def set_index_callback(inner):
+            args = split_args(inner)
+
+            if len(args) != 3:
+                return None
+
+            changed = False
+
+            for index in (1, 2):
+                boxed = box_native(args[index])
+
+                if boxed is not None:
+                    args[index] = boxed
+                    changed = True
+
+            if not changed:
+                return None
+
+            return (
+                "nv_set_index("
+                f"{args[0]}, "
+                f"{args[1]}, "
+                f"{args[2]}"
+                ")"
+            )
+
+        line = replace_balanced(
+            line,
+            "nv_set_index",
+            set_index_callback
+        )
+
+        # nv_call_add(&__c, valeur)
+        #
+        # Le constructeur d'appel attend toujours un NvVal.
+        def call_add_callback(inner):
+            args = split_args(inner)
+
+            if len(args) != 2:
+                return None
+
+            boxed = box_native(args[1])
+
+            if boxed is None:
+                return None
+
+            return (
+                "nv_call_add("
+                f"{args[0]}, "
+                f"{boxed}"
+                ")"
+            )
+
+        line = replace_balanced(
+            line,
+            "nv_call_add",
+            call_add_callback
+        )
+
+        # Les opérations arithmétiques du runtime travaillent
+        # exclusivement avec des NvVal. Boxer les opérandes
+        # éventuellement transformés en types C natifs.
+        for numeric_fn in (
+            "nv_add",
+            "nv_sub",
+            "nv_mul",
+            "nv_div",
+            "nv_mod",
+            "nv_pow",
+        ):
+            def numeric_binary_callback(inner, fn=numeric_fn):
+                args = split_args(inner)
+
+                if len(args) != 2:
+                    return None
+
+                changed = False
+
+                for index in (0, 1):
+                    boxed = box_native(args[index])
+
+                    if boxed is not None:
+                        args[index] = boxed
+                        changed = True
+
+                if not changed:
+                    return None
+
+                return (
+                    f"{fn}("
+                    f"{args[0]}, "
+                    f"{args[1]}"
+                    ")"
+                )
+
+            line = replace_balanced(
+                line,
+                numeric_fn,
+                numeric_binary_callback
+            )
+
+        # nv_neg(...) possède un seul opérande.
+        def numeric_unary_callback(inner):
+            args = split_args(inner)
+
+            if len(args) != 1:
+                return None
+
+            boxed = box_native(args[0])
+
+            if boxed is None:
+                return None
+
+            return f"nv_neg({boxed})"
+
+        line = replace_balanced(
+            line,
+            "nv_neg",
+            numeric_unary_callback
+        )
+
+        # Frontière inverse : NvVal -> type C natif.
+        #
+        # Exemple :
+        #
+        # somme = nv_add(nv_int(somme), nv_get_index(...));
+        #
+        # devient :
+        #
+        # somme = (long long)nv_num(
+        #     nv_add(nv_int(somme), nv_get_index(...))
+        # );
+        #
+        # nv_num() vérifie que le résultat est numérique.
+        numeric_result = re.match(
+            r'^(\s*)'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*'
+            r'(nv_(?:add|sub|mul|div|mod|pow|neg|get_index)'
+            r'\(.*\))'
+            r'\s*;\s*$',
+            line
+        )
+
+        if numeric_result:
+            indent = numeric_result.group(1)
+            target = numeric_result.group(2)
+            expression = numeric_result.group(3)
+
+            if target in native_ints:
+                line = (
+                    f"{indent}{target} = "
+                    f"(long long)nv_num({expression});\n"
+                )
+
+            elif target in native_floats:
+                line = (
+                    f"{indent}{target} = "
+                    f"nv_num({expression});\n"
+                )
+
         output.append(line)
 
     return output
@@ -516,7 +682,7 @@ def main():
         )
 
         print(
-            "[Clair OPT] Raccord numérique/natif appliqué"
+            "[Clariox OPT] Raccord numérique/natif appliqué"
         )
 
     finally:

@@ -606,7 +606,7 @@ def main():
             native[name] = info
 
     if native:
-        print("[Clair OPT] Listes numériques natives :")
+        print("[Clariox OPT] Listes numériques natives :")
 
         for name in sorted(native):
             typ = native[name]["type"]
@@ -618,7 +618,7 @@ def main():
 
     else:
         print(
-            "[Clair OPT] Aucune liste numérique "
+            "[Clariox OPT] Aucune liste numérique "
             "spécialisable"
         )
 
@@ -738,7 +738,7 @@ def main():
         f.writelines(output)
 
     print(
-        "[Clair OPT] Optimisation listes : "
+        "[Clariox OPT] Optimisation listes : "
         f"{destination}"
     )
 

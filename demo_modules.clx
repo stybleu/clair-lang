@@ -1,10 +1,12 @@
-# Clair v5 - démonstration
+utilise base
+
+# Clariox v5 - démonstration
 
 fixe VERSION = "5.0"
 nom = "Alice"
 age = 26
 
-ecris("Clair {VERSION} - Bonjour {nom}, tu as {age} ans")
+ecris("Clariox {VERSION} - Bonjour {nom}, tu as {age} ans")
 
 # Plage directe
 pour i dans 0..4:
@@ -39,7 +41,7 @@ ecris("Double :", double(21))
 
 # Fichier avec fermeture automatique
 avec fichier = ouvre("clair_test.txt", "ecriture"):
-    fichier.ecris("Bonjour depuis Clair")
+    fichier.ecris("Bonjour depuis Clariox")
 
 contenu = lis_fichier("clair_test.txt")
 ecris("Fichier : {contenu}")

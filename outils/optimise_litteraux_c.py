@@ -47,7 +47,7 @@ def main():
             f.write(source)
 
         print(
-            "[Clair OPT] Aucun littéral de chaîne "
+            "[Clariox OPT] Aucun littéral de chaîne "
             "à mettre en cache"
         )
         return
@@ -68,7 +68,7 @@ def main():
     )
 
     # Variables globales : valides dans main() et dans
-    # les fonctions Clair générées.
+    # les fonctions Clariox générées.
     declarations = "\n".join(
         f"static NvVal {names[literal]};"
         for literal in literals
@@ -118,7 +118,7 @@ def main():
         f.write(optimized)
 
     print(
-        f"[Clair OPT] Littéraux de chaînes mis en cache : "
+        f"[Clariox OPT] Littéraux de chaînes mis en cache : "
         f"{len(literals)}"
     )
 

@@ -2,9 +2,9 @@
 
 set -e
 
-cd ~/clair
+cd ~/clariox
 
-./clair bench_append_chaine.clair >/dev/null
+./clariox bench_append_chaine.clx >/dev/null
 
 CFILE="$HOME/clair/bench_append_chaine.c"
 
