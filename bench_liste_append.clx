@@ -1,0 +1,7 @@
+nombres = [0]
+
+pour i dans plage(1000000):
+    nombres.ajoute(50)
+
+ecris("Longueur :", longueur(nombres))
+ecris("Dernier :", nombres[1000000])

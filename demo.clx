@@ -38,10 +38,10 @@ fn double(nombre: entier) -> entier:
 ecris("Double :", double(21))
 
 # Fichier avec fermeture automatique
-avec fichier = ouvre("clair_test.txt", "ecriture"):
+avec fichier = ouvre("clariox_test.txt", "ecriture"):
     fichier.ecris("Bonjour depuis Clariox")
 
-contenu = lis_fichier("clair_test.txt")
+contenu = lis_fichier("clariox_test.txt")
 ecris("Fichier : {contenu}")
 
 # Erreurs

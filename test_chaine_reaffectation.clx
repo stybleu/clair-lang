@@ -1,0 +1,8 @@
+base = "A"
+texte = ""
+
+pour i dans plage(5000000):
+    texte = base + "lice"
+
+ecris("Texte :", texte)
+ecris("Longueur :", longueur(texte))

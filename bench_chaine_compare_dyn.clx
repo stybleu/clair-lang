@@ -1,0 +1,14 @@
+nom = "Alice"
+cible = "Alice"
+compteur = 0
+
+clair_range_index_1 = 0
+clair_range_fin_1 = 100000000
+clair_range_pas_1 = 1
+tantque clair_range_index_1 < clair_range_fin_1:
+    i = clair_range_index_1
+    si nom == cible:
+        compteur = compteur + 1
+
+    clair_range_index_1 = clair_range_index_1 + clair_range_pas_1
+ecris(compteur)

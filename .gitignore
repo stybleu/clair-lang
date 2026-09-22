@@ -1,5 +1,5 @@
 # Binaires compilés
-/clairc
+/clarioxc
 /demo
 /demo_modules
 /bench
@@ -13,7 +13,7 @@
 /bench_fonction_native
 /bench_fonction_decimal
 
-# C généré par Clair
+# C généré par Clariox
 /bench.c
 /bench_native.c
 /bench_auto.c
@@ -26,7 +26,7 @@
 /demo_modules.c
 
 # Fichiers de test générés
-/clair_test.txt
+/clariox_test.txt
 
 # Sauvegardes
 *.bak
@@ -35,8 +35,8 @@
 clair_avant_*
 clair.pre_plage_opt
 
-# Temporaires Clair
-.clair_*
+# Temporaires Clariox
+.clariox_*
 
 # Python
 __pycache__/
@@ -47,7 +47,7 @@ __pycache__/
 *.swp
 /bench_avant_entiers.c
 
-# === Clair : fichiers générés localement ===
+# === Clariox : fichiers générés localement ===
 
 # C généré par les benchmarks/tests
 /bench_*.c
@@ -58,7 +58,7 @@ __pycache__/
 /test_*
 
 # Mais conserver les sources et tests
-!/*.clair
+!/*.clx
 !/*.sh
 
 # Résultats de benchmarks
@@ -72,8 +72,11 @@ __pycache__/
 /outils/*.avant_*
 
 # Compilateurs temporaires
-/clairc_new
-/clairc_v*
+/clarioxc_new
+/clarioxc_v*
 
 # Scripts de patch temporaires
 /patch_*.py
+
+# Clariox test logs
+.test_logs/

@@ -1,4 +1,4 @@
-CLAIR v5 — prototype de langage francophone compilé vers C
+CLARIOX v5 — prototype de langage francophone compilé vers C
 ============================================================
 
 Objectif
@@ -9,12 +9,12 @@ un programme C compilé nativement avec Clang.
 Chaîne actuelle :
 
     programme.clx
-        -> clairc
+        -> clarioxc
         -> programme.c
         -> Clang -O3
         -> exécutable natif
 
-Le runtime est désormais séparé dans clair_runtime.h afin que le fichier C
+Le runtime est désormais séparé dans clariox_runtime.h afin que le fichier C
 généré reste beaucoup plus lisible.
 
 Installation Termux
@@ -30,8 +30,8 @@ Compilation manuelle
 --------------------
 
     cd ~/clariox
-    clang clairc.c -std=gnu11 -O2 -Wall -Wextra -o clairc
-    ./clairc demo.clx demo
+    clang clarioxc.c -std=gnu11 -O2 -Wall -Wextra -o clarioxc
+    ./clarioxc demo.clx demo
     ./demo
 
 Voir le C généré :
@@ -40,7 +40,7 @@ Voir le C généré :
 
 Voir le runtime séparé :
 
-    less clair_runtime.h
+    less clariox_runtime.h
 
 Syntaxe prise en charge
 -----------------------

@@ -631,7 +631,7 @@ def main():
             not helpers_inserted
             and native
             and line.startswith(
-                '#include "clariox_runtime.h"'
+                '#include "clair_runtime.h"'
             )
         ):
             output.append(line)

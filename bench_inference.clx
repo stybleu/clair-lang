@@ -1,0 +1,9 @@
+fn calcule(a, b):
+    retourne (a * 3 + b) % 1000000007
+
+x = 1
+
+pour i dans plage(10000000):
+    x = calcule(x, i)
+
+ecris(x)

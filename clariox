@@ -5,11 +5,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 if [ $# -lt 1 ]; then
-    echo "Clair - compilateur natif modulaire"
+    echo "Clariox - compilateur natif modulaire"
     echo
     echo "Usage :"
-    echo "  ./clair programme.clair"
-    echo "  ./clair programme.clair programme"
+    echo "  ./clariox programme.clx"
+    echo "  ./clariox programme.clx programme"
     exit 1
 fi
 
@@ -21,28 +21,28 @@ if [[ "$SOURCE" != /* ]]; then
 fi
 
 if [ ! -f "$SOURCE" ]; then
-    echo "[Clair] Fichier introuvable : $SOURCE"
+    echo "[Clariox] Fichier introuvable : $SOURCE"
     exit 1
 fi
 
 if [ $# -ge 2 ]; then
     OUTPUT="$2"
 else
-    OUTPUT="$(basename "$SOURCE" .clair)"
+    OUTPUT="$(basename "$SOURCE" .clx)"
 fi
 
 if [[ "$OUTPUT" != /* ]]; then
     OUTPUT="$ORIGINAL_DIR/$OUTPUT"
 fi
 
-RAW="$ROOT/.clair_raw_$$.clair"
-OPT="$ROOT/.clair_opt_$$.clair"
-FUNC_C="$ROOT/.clair_func_$$.c"
-LIST_C="$ROOT/.clair_list_$$.c"
-STRING_C="$ROOT/.clair_string_$$.c"
-LITERAL_C="$ROOT/.clair_literal_$$.c"
-NATIVE_C="$ROOT/.clair_native_$$.c"
-NATIVE_BIN="$ROOT/.clair_native_bin_$$"
+RAW="$ROOT/.clariox_raw_$$.clx"
+OPT="$ROOT/.clariox_opt_$$.clx"
+FUNC_C="$ROOT/.clariox_func_$$.c"
+LIST_C="$ROOT/.clariox_list_$$.c"
+STRING_C="$ROOT/.clariox_string_$$.c"
+LITERAL_C="$ROOT/.clariox_literal_$$.c"
+NATIVE_C="$ROOT/.clariox_native_$$.c"
+NATIVE_BIN="$ROOT/.clariox_native_bin_$$"
 
 cleanup() {
     rm -f \
@@ -68,16 +68,16 @@ charger_fichier() {
         if [[ "$ligne" =~ ^[[:space:]]*utilise[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*$ ]]; then
 
             module="${BASH_REMATCH[1]}"
-            module_file="$ROOT/modules/$module.clair"
+            module_file="$ROOT/modules/$module.clx"
 
             if [ ! -f "$module_file" ]; then
-                echo "[Clair] Module introuvable : $module"
+                echo "[Clariox] Module introuvable : $module"
                 exit 1
             fi
 
             if [ -z "${MODULES_CHARGES[$module]+x}" ]; then
                 MODULES_CHARGES[$module]=1
-                echo "[Clair] Module : $module"
+                echo "[Clariox] Module : $module"
                 charger_fichier "$module_file"
             fi
 
@@ -95,25 +95,25 @@ python \
     "$RAW" \
     "$OPT"
 
-echo "[Clair] Optimisation plage()"
-echo "[Clair] Génération C"
+echo "[Clariox] Optimisation plage()"
+echo "[Clariox] Génération C"
 
 cd "$ROOT"
 
-"$ROOT/clairc" "$OPT" "$OUTPUT"
+"$ROOT/clarioxc" "$OPT" "$OUTPUT"
 
 CFILE="${OUTPUT}.c"
 
 if [ -f "$CFILE" ]; then
 
-    echo "[Clair] Analyse des fonctions numériques"
+    echo "[Clariox] Analyse des fonctions numériques"
 
     if python \
         "$ROOT/outils/optimise_fonctions_c.py" \
         "$CFILE" \
         "$FUNC_C"; then
 
-        echo "[Clair] Optimisation des listes homogènes"
+        echo "[Clariox] Optimisation des listes homogènes"
 
         NUMERIC_INPUT="$FUNC_C"
 
@@ -125,7 +125,7 @@ if [ -f "$CFILE" ]; then
             NUMERIC_INPUT="$LIST_C"
         fi
 
-        echo "[Clair] Optimisation des chaînes"
+        echo "[Clariox] Optimisation des chaînes"
 
         if python \
             "$ROOT/outils/optimise_chaines_c.py" \
@@ -134,10 +134,10 @@ if [ -f "$CFILE" ]; then
 
             NUMERIC_INPUT="$STRING_C"
         else
-            echo "[Clair] Optimisation chaînes ignorée"
+            echo "[Clariox] Optimisation chaînes ignorée"
         fi
 
-        echo "[Clair] Mise en cache des littéraux"
+        echo "[Clariox] Mise en cache des littéraux"
 
         if python \
             "$ROOT/outils/optimise_litteraux_c.py" \
@@ -146,17 +146,17 @@ if [ -f "$CFILE" ]; then
 
             NUMERIC_INPUT="$LITERAL_C"
         else
-            echo "[Clair] Optimisation littéraux ignorée"
+            echo "[Clariox] Optimisation littéraux ignorée"
         fi
 
-        echo "[Clair] Analyse des types natifs"
+        echo "[Clariox] Analyse des types natifs"
 
         if python \
             "$ROOT/outils/optimise_numeriques_mixte_c.py" \
             "$NUMERIC_INPUT" \
             "$NATIVE_C"; then
 
-            echo "[Clair] Compilation native -O3"
+            echo "[Clariox] Compilation native -O3"
 
             if clang \
                 -O3 \
@@ -171,27 +171,27 @@ if [ -f "$CFILE" ]; then
                 chmod +x "$OUTPUT"
 
                 echo \
-                    "[Clair] Optimisation native appliquée"
+                    "[Clariox] Optimisation native appliquée"
             else
                 echo \
-                    "[Clair] Compilation native échouée"
+                    "[Clariox] Compilation native échouée"
                 echo \
-                    "[Clair] Version dynamique conservée"
+                    "[Clariox] Version dynamique conservée"
             fi
 
         else
             echo \
-                "[Clair] Analyse numérique impossible"
+                "[Clariox] Analyse numérique impossible"
             echo \
-                "[Clair] Version dynamique conservée"
+                "[Clariox] Version dynamique conservée"
         fi
 
     else
         echo \
-            "[Clair] Spécialisation fonctions impossible"
+            "[Clariox] Spécialisation fonctions impossible"
         echo \
-            "[Clair] Version dynamique conservée"
+            "[Clariox] Version dynamique conservée"
     fi
 fi
 
-echo "[Clair] Exécutable : $OUTPUT"
+echo "[Clariox] Exécutable : $OUTPUT"

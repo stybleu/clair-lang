@@ -74,11 +74,11 @@ def main():
         for literal in literals
     )
 
-    include_marker = '#include "clariox_runtime.h"'
+    include_marker = '#include "clair_runtime.h"'
 
     if include_marker not in optimized:
         raise SystemExit(
-            "Include clariox_runtime.h introuvable"
+            "Include clair_runtime.h introuvable"
         )
 
     optimized = optimized.replace(
