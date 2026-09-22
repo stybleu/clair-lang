@@ -163,9 +163,9 @@ def transform(lines):
         counter += 1
         n = counter
 
-        index_name = f"clair_range_index_{n}"
-        stop_name = f"clair_range_fin_{n}"
-        step_name = f"clair_range_pas_{n}"
+        index_name = f"clariox_range_index_{n}"
+        stop_name = f"clariox_range_fin_{n}"
+        step_name = f"clariox_range_pas_{n}"
 
         body_indent = spaces + "    "
 

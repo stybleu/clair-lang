@@ -7,22 +7,22 @@ import sys
 HELPERS = r'''
 #include <string.h>
 
-typedef struct ClairStringStorage {
+typedef struct ClarioxStringStorage {
     long long refs;
     long long cap;
     char data[];
-} ClairStringStorage;
+} ClarioxStringStorage;
 
 typedef struct {
     const char *data;
     long long len;
-    ClairStringStorage *storage;
-} ClairString;
+    ClarioxStringStorage *storage;
+} ClarioxString;
 
 
-static ClairString clair_string_literal(const char *s)
+static ClarioxString clariox_string_literal(const char *s)
 {
-    ClairString r;
+    ClarioxString r;
     r.data = s;
     r.len = (long long)strlen(s);
     r.storage = NULL;
@@ -30,8 +30,8 @@ static ClairString clair_string_literal(const char *s)
 }
 
 
-static ClairString clair_string_concat_many(
-    const ClairString *parts,
+static ClarioxString clariox_string_concat_many(
+    const ClarioxString *parts,
     long long count
 ) {
     long long total = 0;
@@ -40,8 +40,8 @@ static ClairString clair_string_concat_many(
         total += parts[i].len;
     }
 
-    ClairStringStorage *storage = nv_xmalloc(
-        sizeof(ClairStringStorage)
+    ClarioxStringStorage *storage = nv_xmalloc(
+        sizeof(ClarioxStringStorage)
         + (size_t)total
         + 1
     );
@@ -67,7 +67,7 @@ static ClairString clair_string_concat_many(
 
     buffer[total] = '\0';
 
-    ClairString r;
+    ClarioxString r;
     r.data = buffer;
     r.len = total;
     r.storage = storage;
@@ -76,9 +76,9 @@ static ClairString clair_string_concat_many(
 }
 
 
-static int clair_string_eq(
-    ClairString a,
-    ClairString b
+static int clariox_string_eq(
+    ClarioxString a,
+    ClarioxString b
 ) {
     if (a.len != b.len) {
         return 0;
@@ -96,8 +96,8 @@ static int clair_string_eq(
 }
 
 
-static ClairString clair_string_char(
-    ClairString s,
+static ClarioxString clariox_string_char(
+    ClarioxString s,
     long long index
 ) {
     if (index < 0) {
@@ -108,7 +108,7 @@ static ClairString clair_string_char(
         nv_throw("Indice de chaîne hors limites");
     }
 
-    ClairString r;
+    ClarioxString r;
 
     r.data = s.data + index;
     r.len = 1;
@@ -118,8 +118,8 @@ static ClairString clair_string_char(
 }
 
 
-static ClairString clair_string_copy(
-    ClairString s
+static ClarioxString clariox_string_copy(
+    ClarioxString s
 ) {
     if (s.storage) {
         s.storage->refs++;
@@ -129,8 +129,8 @@ static ClairString clair_string_copy(
 }
 
 
-static void clair_string_release(
-    ClairString *s
+static void clariox_string_release(
+    ClarioxString *s
 ) {
     if (!s) {
         return;
@@ -159,9 +159,9 @@ static void clair_string_release(
  * La concaténation lit d'abord l'ancien texte,
  * puis seulement l'ancien stockage est libéré.
  */
-static void clair_string_assign_concat_many(
-    ClairString *dst,
-    const ClairString *parts,
+static void clariox_string_assign_concat_many(
+    ClarioxString *dst,
+    const ClarioxString *parts,
     long long count
 ) {
     long long total = 0;
@@ -178,7 +178,7 @@ static void clair_string_assign_concat_many(
         }
     }
 
-    ClairStringStorage *target = NULL;
+    ClarioxStringStorage *target = NULL;
     int reused = 0;
 
     /*
@@ -204,9 +204,9 @@ static void clair_string_assign_concat_many(
                 new_cap *= 2;
             }
 
-            ClairStringStorage *p = realloc(
+            ClarioxStringStorage *p = realloc(
                 target,
-                sizeof(ClairStringStorage)
+                sizeof(ClarioxStringStorage)
                 + (size_t)new_cap
                 + 1
             );
@@ -229,7 +229,7 @@ static void clair_string_assign_concat_many(
         }
 
         target = nv_xmalloc(
-            sizeof(ClairStringStorage)
+            sizeof(ClarioxStringStorage)
             + (size_t)cap
             + 1
         );
@@ -260,7 +260,7 @@ static void clair_string_assign_concat_many(
      * pour préserver les éventuelles sources aliasées.
      */
     if (!reused) {
-        clair_string_release(dst);
+        clariox_string_release(dst);
     }
 
     dst->storage = target;
@@ -269,9 +269,9 @@ static void clair_string_assign_concat_many(
 }
 
 
-static void clair_string_append_char(
-    ClairString *dst,
-    ClairString ch
+static void clariox_string_append_char(
+    ClarioxString *dst,
+    ClarioxString ch
 ) {
     if (ch.len != 1) {
         nv_throw(
@@ -336,8 +336,8 @@ static void clair_string_append_char(
         cap = next;
     }
 
-    ClairStringStorage *storage = nv_xmalloc(
-        sizeof(ClairStringStorage)
+    ClarioxStringStorage *storage = nv_xmalloc(
+        sizeof(ClarioxStringStorage)
         + (size_t)cap
         + 1
     );
@@ -356,7 +356,7 @@ static void clair_string_append_char(
     storage->data[old_len] = value;
     storage->data[needed] = '\0';
 
-    clair_string_release(dst);
+    clariox_string_release(dst);
 
     dst->storage = storage;
     dst->data = storage->data;
@@ -364,9 +364,9 @@ static void clair_string_append_char(
 }
 
 
-static void clair_string_assign_char(
-    ClairString *dst,
-    ClairString src,
+static void clariox_string_assign_char(
+    ClarioxString *dst,
+    ClarioxString src,
     long long index
 ) {
     if (index < 0) {
@@ -409,10 +409,10 @@ static void clair_string_assign_char(
      *
      * Les affectations suivantes pourront le réutiliser.
      */
-    clair_string_release(dst);
+    clariox_string_release(dst);
 
-    ClairStringStorage *storage = nv_xmalloc(
-        sizeof(ClairStringStorage) + 2
+    ClarioxStringStorage *storage = nv_xmalloc(
+        sizeof(ClarioxStringStorage) + 2
     );
 
     storage->refs = 1;
@@ -426,17 +426,17 @@ static void clair_string_assign_char(
 }
 
 
-static void clair_string_assign_move(
-    ClairString *dst,
-    ClairString src
+static void clariox_string_assign_move(
+    ClarioxString *dst,
+    ClarioxString src
 ) {
-    clair_string_release(dst);
+    clariox_string_release(dst);
     *dst = src;
 }
 
 
-static NvVal clair_string_box(
-    ClairString s
+static NvVal clariox_string_box(
+    ClarioxString s
 ) {
     char *buffer = nv_xmalloc(
         (size_t)s.len + 1
@@ -556,7 +556,7 @@ def literal_code(expr):
         return None
 
     return (
-        f"clair_string_literal({m.group(1)})"
+        f"clariox_string_literal({m.group(1)})"
     )
 
 
@@ -712,7 +712,7 @@ def string_terms(expr, native):
             return None
 
         return [
-            "clair_string_char("
+            "clariox_string_char("
             f"{source}, "
             f"(long long)({index})"
             ")"
@@ -757,8 +757,8 @@ def string_code(expr, native):
         return terms[0]
 
     return (
-        "clair_string_concat_many("
-        "(ClairString[]){"
+        "clariox_string_concat_many("
+        "(ClarioxString[]){"
         + ", ".join(terms)
         + "}, "
         + str(len(terms))
@@ -973,7 +973,7 @@ def replace_native_index_assignment(
     string, index = result
 
     return (
-        f"{indent}clair_string_assign_char("
+        f"{indent}clariox_string_assign_char("
         f"&{name}, "
         f"{string}, "
         f"(long long)({index})"
@@ -1005,8 +1005,8 @@ def replace_index_calls(line, native):
             return None
 
         return (
-            "clair_string_box("
-            "clair_string_char("
+            "clariox_string_box("
+            "clariox_string_char("
             f"{string}, "
             f"(long long)({index})"
             "))"
@@ -1023,16 +1023,16 @@ def discover_string_literals(lines):
     """
     Retrouve les littéraux générés par le compilateur :
 
-        clair_literal_2 = nv_str("A");
+        clariox_literal_2 = nv_str("A");
 
-    et permet ensuite de les utiliser comme ClairString
+    et permet ensuite de les utiliser comme ClarioxString
     sans passer par NvVal.
     """
     literals = {}
 
     pattern = re.compile(
         r'^\s*'
-        r'(clair_literal_[A-Za-z0-9_]+)'
+        r'(clariox_literal_[A-Za-z0-9_]+)'
         r'\s*=\s*'
         r'nv_str\('
         r'("(?:\\.|[^"\\])*")'
@@ -1052,7 +1052,7 @@ def discover_string_literals(lines):
 def native_string_operand(expr, native, literals):
     """
     Convertit une expression qui représente une chaîne
-    vers son équivalent ClairString natif lorsque c'est sûr.
+    vers son équivalent ClarioxString natif lorsque c'est sûr.
     """
     expr = strip_outer_parens(expr)
 
@@ -1066,24 +1066,24 @@ def native_string_operand(expr, native, literals):
         return code
 
     # Littéraux pré-générés :
-    # clair_literal_2 -> clair_string_literal("A")
+    # clariox_literal_2 -> clariox_string_literal("A")
     if expr in literals:
         return (
-            "clair_string_literal("
+            "clariox_string_literal("
             f"{literals[expr]}"
             ")"
         )
 
     # Une opération précédente a éventuellement produit :
     #
-    # clair_string_box(
-    #     clair_string_char(...)
+    # clariox_string_box(
+    #     clariox_string_char(...)
     # )
     #
     # Dans une comparaison de chaînes, le boxing est inutile.
     inner = unwrap(
         expr,
-        "clair_string_box"
+        "clariox_string_box"
     )
 
     if inner is not None:
@@ -1097,13 +1097,13 @@ def native_string_operand(expr, native, literals):
         if code is not None:
             return code
 
-        # Expressions ClairString produites directement
+        # Expressions ClarioxString produites directement
         # par l'optimiseur.
         native_functions = (
-            "clair_string_char",
-            "clair_string_concat_many",
-            "clair_string_literal",
-            "clair_string_copy",
+            "clariox_string_char",
+            "clariox_string_concat_many",
+            "clariox_string_literal",
+            "clariox_string_copy",
         )
 
         for function_name in native_functions:
@@ -1154,7 +1154,7 @@ def replace_eq_calls(
                 return None
 
             comparison = (
-                "clair_string_eq("
+                "clariox_string_eq("
                 f"{a}, {b}"
                 ")"
             )
@@ -1216,13 +1216,13 @@ def replace_native_string_truth(line):
         # ==
         if unwrap(
             bool_inner,
-            "clair_string_eq"
+            "clariox_string_eq"
         ) is not None:
             return f"({bool_inner})"
 
         # != devient :
         #
-        # !(clair_string_eq(...))
+        # !(clariox_string_eq(...))
         if bool_inner.startswith("!"):
             negated = strip_outer_parens(
                 bool_inner[1:].strip()
@@ -1230,7 +1230,7 @@ def replace_native_string_truth(line):
 
             if unwrap(
                 negated,
-                "clair_string_eq"
+                "clariox_string_eq"
             ) is not None:
                 return f"(!({negated}))"
 
@@ -1332,11 +1332,11 @@ def main():
                     and code in native
                 ):
                     code = (
-                        f"clair_string_copy({code})"
+                        f"clariox_string_copy({code})"
                     )
 
                 declaration = (
-                    f"ClairString {name} = "
+                    f"ClarioxString {name} = "
                     f"{code};\n"
                 )
                 break
@@ -1353,7 +1353,7 @@ def main():
         #     texte = texte + "x"
         #
         # On calcule d'abord la nouvelle valeur puis
-        # clair_string_assign_move() libère l'ancienne.
+        # clariox_string_assign_move() libère l'ancienne.
         for name in native:
             m_assign = re.match(
                 rf'^(\s*){re.escape(name)}'
@@ -1385,7 +1385,7 @@ def main():
                 indent = m_assign.group(1)
 
                 new_line = (
-                    f"{indent}clair_string_assign_char("
+                    f"{indent}clariox_string_assign_char("
                     f"&{name}, "
                     f"{source_code}, "
                     f"(long long)({index_code})"
@@ -1410,7 +1410,7 @@ def main():
                 and native_rhs in native
             ):
                 native_rhs = (
-                    f"clair_string_copy({native_rhs})"
+                    f"clariox_string_copy({native_rhs})"
                 )
 
             indent = m_assign.group(1)
@@ -1426,14 +1426,14 @@ def main():
                 and terms[0] == name
                 and unwrap(
                     terms[1],
-                    "clair_string_char"
+                    "clariox_string_char"
                 ) is not None
             )
 
             if append_char:
                 new_line = (
                     f"{indent}"
-                    f"clair_string_append_char("
+                    f"clariox_string_append_char("
                     f"&{name}, "
                     f"{terms[1]}"
                     f");\n"
@@ -1442,9 +1442,9 @@ def main():
             elif terms is not None and len(terms) > 1:
                 new_line = (
                     f"{indent}"
-                    f"clair_string_assign_concat_many("
+                    f"clariox_string_assign_concat_many("
                     f"&{name}, "
-                    f"(ClairString[]){{"
+                    f"(ClarioxString[]){{"
                     + ", ".join(terms)
                     + f"}}, "
                     f"{len(terms)}LL);\n"
@@ -1452,7 +1452,7 @@ def main():
 
             else:
                 new_line = (
-                    f"{indent}clair_string_assign_move("
+                    f"{indent}clariox_string_assign_move("
                     f"&{name}, {native_rhs});\n"
                 )
 
@@ -1492,7 +1492,7 @@ def main():
                 rf'{re.escape(name)}\)',
                 (
                     'nv_call_add(&__c, '
-                    f'clair_string_box({name}))'
+                    f'clariox_string_box({name}))'
                 ),
                 new_line
             )
@@ -1504,7 +1504,7 @@ def main():
         ):
             for string_name in reversed(main_strings):
                 output.append(
-                    f"    clair_string_release("
+                    f"    clariox_string_release("
                     f"&{string_name});\n"
                 )
 

@@ -273,7 +273,7 @@ def repair(lines):
                 native_floats.add(m.group(1))
 
             m = re.match(
-                r'^\s*ClairString\s+'
+                r'^\s*ClarioxString\s+'
                 r'([A-Za-z_][A-Za-z0-9_]*)\b',
                 line
             )
@@ -354,7 +354,7 @@ def repair(lines):
         expr = strip_outer(expr)
 
         if expr in native_strings:
-            return f"clair_string_box({expr})"
+            return f"clariox_string_box({expr})"
 
         if expr in native_ints:
             return f"nv_int({expr})"
@@ -400,7 +400,7 @@ def repair(lines):
         # NvVal __selon1 = couleur;
         #
         # devient :
-        # NvVal __selon1 = clair_string_box(couleur);
+        # NvVal __selon1 = clariox_string_box(couleur);
         m = re.match(
             r'^(\s*)NvVal\s+'
             r'([A-Za-z_][A-Za-z0-9_]*)'

@@ -92,14 +92,14 @@ def convert_expr(expr, types):
 
     # Lecture d'une liste native de décimaux.
     if (
-        expr.startswith("clair_double_list_get(")
+        expr.startswith("clariox_double_list_get(")
         and expr.endswith(")")
     ):
         return expr, "double"
 
     # Lecture d'une liste native d'entiers.
     if (
-        expr.startswith("clair_int_list_get(")
+        expr.startswith("clariox_int_list_get(")
         and expr.endswith(")")
     ):
         return expr, "int"
@@ -307,7 +307,7 @@ def main():
     for line in body:
         m = re.match(
             r'\s*NvVal\s+'
-            r'(clair_range_(?:index|fin|pas)_\d+)'
+            r'(clariox_range_(?:index|fin|pas)_\d+)'
             r'\s*=\s*nv_int\(',
             line
         )
@@ -319,7 +319,7 @@ def main():
     for line in body:
         m = re.match(
             r'\s*NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
-            r'\s*=\s*(clair_range_index_\d+)\s*;',
+            r'\s*=\s*(clariox_range_index_\d+)\s*;',
             line
         )
 
@@ -404,7 +404,7 @@ def main():
 
     for name in unsafe:
         # Ne jamais retirer les compteurs internes.
-        if not name.startswith("clair_range_"):
+        if not name.startswith("clariox_range_"):
             types.pop(name, None)
 
     print("[Clariox OPT] Types natifs :")

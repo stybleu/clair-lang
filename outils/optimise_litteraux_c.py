@@ -53,7 +53,7 @@ def main():
         return
 
     names = {
-        literal: f"clair_literal_{i + 1}"
+        literal: f"clariox_literal_{i + 1}"
         for i, literal in enumerate(literals)
     }
 

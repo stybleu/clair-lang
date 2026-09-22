@@ -207,7 +207,7 @@ def parse_functions(lines):
 
     while i < len(lines):
         m = re.match(
-            r'\s*static NvVal clair_fn_'
+            r'\s*static NvVal clariox_fn_'
             r'([A-Za-z_][A-Za-z0-9_]*)'
             r'\(NvVal \*__args, int __argc, '
             r'NvDict \*__kwargs\)\s*\{\s*$',

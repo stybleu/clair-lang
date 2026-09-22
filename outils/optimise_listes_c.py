@@ -9,20 +9,20 @@ typedef struct {
     long long *data;
     long long len;
     long long cap;
-} ClairIntList;
+} ClarioxIntList;
 
 typedef struct {
     double *data;
     long long len;
     long long cap;
-} ClairDoubleList;
+} ClarioxDoubleList;
 
 
-static ClairIntList clair_int_list_make(
+static ClarioxIntList clariox_int_list_make(
     const long long *src,
     long long len
 ) {
-    ClairIntList l;
+    ClarioxIntList l;
 
     l.len = len;
     l.cap = len > 4 ? len : 4;
@@ -36,11 +36,11 @@ static ClairIntList clair_int_list_make(
 }
 
 
-static ClairDoubleList clair_double_list_make(
+static ClarioxDoubleList clariox_double_list_make(
     const double *src,
     long long len
 ) {
-    ClairDoubleList l;
+    ClarioxDoubleList l;
 
     l.len = len;
     l.cap = len > 4 ? len : 4;
@@ -54,8 +54,8 @@ static ClairDoubleList clair_double_list_make(
 }
 
 
-static void clair_int_list_append(
-    ClairIntList *l,
+static void clariox_int_list_append(
+    ClarioxIntList *l,
     long long value
 ) {
     if (l->len >= l->cap) {
@@ -77,8 +77,8 @@ static void clair_int_list_append(
 }
 
 
-static void clair_double_list_append(
-    ClairDoubleList *l,
+static void clariox_double_list_append(
+    ClarioxDoubleList *l,
     double value
 ) {
     if (l->len >= l->cap) {
@@ -100,8 +100,8 @@ static void clair_double_list_append(
 }
 
 
-static long long clair_int_list_get(
-    ClairIntList *l,
+static long long clariox_int_list_get(
+    ClarioxIntList *l,
     long long index
 ) {
     if (index < 0) {
@@ -116,8 +116,8 @@ static long long clair_int_list_get(
 }
 
 
-static double clair_double_list_get(
-    ClairDoubleList *l,
+static double clariox_double_list_get(
+    ClarioxDoubleList *l,
     long long index
 ) {
     if (index < 0) {
@@ -132,8 +132,8 @@ static double clair_double_list_get(
 }
 
 
-static NvVal clair_int_list_box(
-    const ClairIntList *l
+static NvVal clariox_int_list_box(
+    const ClarioxIntList *l
 ) {
     NvVal v = nv_list_new();
 
@@ -145,8 +145,8 @@ static NvVal clair_int_list_box(
 }
 
 
-static NvVal clair_double_list_box(
-    const ClairDoubleList *l
+static NvVal clariox_double_list_box(
+    const ClarioxDoubleList *l
 ) {
     NvVal v = nv_list_new();
 
@@ -424,14 +424,14 @@ def replace_indexes(line, name, list_type):
 
         if list_type == "int":
             replacement = (
-                f"nv_int(clair_int_list_get("
+                f"nv_int(clariox_int_list_get("
                 f"&{name}, "
                 f"(long long)({native_index})))"
             )
 
         else:
             replacement = (
-                f"nv_float(clair_double_list_get("
+                f"nv_float(clariox_double_list_get("
                 f"&{name}, "
                 f"(long long)({native_index})))"
             )
@@ -567,13 +567,13 @@ def replace_append(line, name, list_type):
 
     if list_type == "int":
         return (
-            f'{indent}clair_int_list_append('
+            f'{indent}clariox_int_list_append('
             f'&{name}, '
             f'(long long)({expr}));\n'
         )
 
     return (
-        f'{indent}clair_double_list_append('
+        f'{indent}clariox_double_list_append('
         f'&{name}, '
         f'(double)({expr}));\n'
     )
@@ -654,8 +654,8 @@ def main():
                 )
 
                 output.append(
-                    f'ClairIntList {name} = '
-                    f'clair_int_list_make('
+                    f'ClarioxIntList {name} = '
+                    f'clariox_int_list_make('
                     f'(long long[]){{{values}}}, '
                     f'{len(info["items"])}LL);\n'
                 )
@@ -672,8 +672,8 @@ def main():
                         values.append(value)
 
                 output.append(
-                    f'ClairDoubleList {name} = '
-                    f'clair_double_list_make('
+                    f'ClarioxDoubleList {name} = '
+                    f'clariox_double_list_make('
                     f'(double[]){{'
                     f'{", ".join(values)}'
                     f'}}, '
@@ -713,12 +713,12 @@ def main():
 
             if info["type"] == "int":
                 boxing = (
-                    f'clair_int_list_box(&{name})'
+                    f'clariox_int_list_box(&{name})'
                 )
 
             else:
                 boxing = (
-                    f'clair_double_list_box(&{name})'
+                    f'clariox_double_list_box(&{name})'
                 )
 
             new_line = re.sub(

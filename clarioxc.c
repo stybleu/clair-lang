@@ -917,7 +917,7 @@ static FuncMeta *register_function(const char *name,const char *owner,char *para
     FuncMeta *fm=&funcs[func_count++]; memset(fm,0,sizeof(*fm));
     snprintf(fm->name,sizeof(fm->name),"%s",name);
     if(owner&&*owner)snprintf(fm->owner,sizeof(fm->owner),"%s",owner);
-    if(owner&&*owner)snprintf(fm->internal,sizeof(fm->internal),"clair_%s_%s",owner,name); else snprintf(fm->internal,sizeof(fm->internal),"clair_fn_%s",name);
+    if(owner&&*owner)snprintf(fm->internal,sizeof(fm->internal),"clariox_%s_%s",owner,name); else snprintf(fm->internal,sizeof(fm->internal),"clariox_fn_%s",name);
     snprintf(fm->return_type,sizeof(fm->return_type),"%s",ret&&*ret?ret:"auto");
     parse_params(params,fm);
     return fm;
