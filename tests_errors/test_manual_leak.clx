@@ -1,0 +1,5 @@
+manual buffer = alloc(32)
+
+buffer.write(0, 42)
+
+print("Leaving manual buffer allocated")

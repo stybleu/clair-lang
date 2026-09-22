@@ -343,6 +343,7 @@ static void expect(Lexer *lx, TokenKind k, const char *what) {
 static char *parse_expr(Lexer *lx);
 
 static char *compile_expr(const char *src, int lineno);
+static int manual_alloc_context = 0;
 
 /* Interpolation simple : "Bonjour {nom}". {{ et }} écrivent des accolades. */
 static char *compile_interpolated_string(const char *token, int lineno) {
@@ -405,6 +406,8 @@ static char *join_binary(const char *fn, char *a, char *b) {
 }
 
 static char *build_call_expr(Lexer *lx, const char *name, char *receiver) {
+    if (!receiver && strcmp(name, "alloc") == 0 && !manual_alloc_context)
+        die("Line %d: alloc() requires a manual declaration", lx->lineno);
     expect(lx, TK_LPAREN, "(");
     advance(lx);
 
@@ -691,14 +694,18 @@ static const char *RUNTIME_C =
 "typedef struct NvObj NvObj;\n"
 "typedef struct NvCall NvCall;\n"
 "typedef struct NvTryFrame NvTryFrame;\n"
+"typedef struct NvMemory NvMemory;\n"
 "\n"
-"typedef enum { NV_NONE, NV_INT, NV_FLOAT, NV_BOOL, NV_STR, NV_LIST, NV_DICT, NV_OBJ, NV_FILE } NvKind;\n"
-"struct NvVal { NvKind kind; union { long long i; double f; int b; char *s; NvList *list; NvDict *dict; NvObj *obj; FILE *file; } as; };\n"
+"typedef enum { NV_NONE, NV_INT, NV_FLOAT, NV_BOOL, NV_STR, NV_LIST, NV_DICT, NV_OBJ, NV_FILE, NV_MEMORY } NvKind;\n"
+"struct NvVal { NvKind kind; union { long long i; double f; int b; char *s; NvList *list; NvDict *dict; NvObj *obj; FILE *file; NvMemory *memory; } as; };\n"
 "struct NvList { NvVal *items; int len, cap; };\n"
 "struct NvDict { char **keys; NvVal *vals; int len, cap; };\n"
 "struct NvObj { char *type; NvDict *fields; };\n"
 "struct NvCall { NvVal *args; int argc, cap; NvDict *kw; };\n"
 "struct NvTryFrame { jmp_buf env; NvTryFrame *prev; };\n"
+"struct NvMemory { unsigned char *data; size_t size; int freed; NvMemory *next; };\n"
+"static NvMemory *nv_memory_head = NULL;\n"
+"static int nv_memory_cleanup_registered = 0;\n"
 "static NvTryFrame *nv_try_top = NULL;\n"
 "static char nv_error_message[1024] = {0};\n"
 "\n"
@@ -752,11 +759,18 @@ static const char *RUNTIME_C =
 "static NvVal nv_dict_new_value(void){ NvVal v=nv_none(); v.kind=NV_DICT; v.as.dict=nv_dict_new(); return v;}\n"
 "static NvVal nv_list_new(void){ NvVal v=nv_none(); v.kind=NV_LIST; v.as.list=nv_xmalloc(sizeof(NvList)); v.as.list->items=NULL; v.as.list->len=0; v.as.list->cap=0; return v;}\n"
 "static NvVal nv_file_value(FILE *f){ NvVal v=nv_none(); v.kind=NV_FILE; v.as.file=f; return v;}\n"
-"static NvVal nv_to_str(NvVal v){ char b[256]; switch(v.kind){case NV_STR:return nv_str(v.as.s);case NV_NONE:return nv_str(\"none\");case NV_INT:snprintf(b,sizeof(b),\"%lld\",v.as.i);return nv_str(b);case NV_FLOAT:snprintf(b,sizeof(b),\"%g\",v.as.f);return nv_str(b);case NV_BOOL:return nv_str(v.as.b?\"true\":\"false\");case NV_LIST:return nv_str(\"<list>\");case NV_DICT:return nv_str(\"<dict>\");case NV_OBJ:snprintf(b,sizeof(b),\"<%s>\",v.as.obj->type);return nv_str(b);case NV_FILE:return nv_str(\"<file>\");}return nv_str(\"\");}\n"
+"static NvVal nv_to_str(NvVal v){ char b[256]; switch(v.kind){case NV_STR:return nv_str(v.as.s);case NV_NONE:return nv_str(\"none\");case NV_INT:snprintf(b,sizeof(b),\"%lld\",v.as.i);return nv_str(b);case NV_FLOAT:snprintf(b,sizeof(b),\"%g\",v.as.f);return nv_str(b);case NV_BOOL:return nv_str(v.as.b?\"true\":\"false\");case NV_LIST:return nv_str(\"<list>\");case NV_DICT:return nv_str(\"<dict>\");case NV_OBJ:snprintf(b,sizeof(b),\"<%s>\",v.as.obj->type);return nv_str(b);case NV_MEMORY:if(!v.as.memory||v.as.memory->freed)return nv_str(\"<memory freed>\");snprintf(b,sizeof(b),\"<memory %zu bytes>\",v.as.memory->size);return nv_str(b);case NV_FILE:return nv_str(\"<file>\");}return nv_str(\"\");}\n"
 "static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error_message),\"%s\",msg); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Clariox error: %s\\n\",msg); exit(1);}\n"
 "static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Clariox error: %s\\n\",nv_error_message); exit(1);}\n"
-"static int nv_truth(NvVal v){ switch(v.kind){case NV_NONE:return 0;case NV_BOOL:return v.as.b;case NV_INT:return v.as.i!=0;case NV_FLOAT:return v.as.f!=0.0;case NV_STR:return v.as.s&&v.as.s[0];case NV_LIST:return v.as.list&&v.as.list->len>0;case NV_DICT:return v.as.dict&&v.as.dict->len>0;case NV_OBJ:return 1;case NV_FILE:return v.as.file!=NULL;} return 0;}\n"
+"static int nv_truth(NvVal v){ switch(v.kind){case NV_NONE:return 0;case NV_BOOL:return v.as.b;case NV_INT:return v.as.i!=0;case NV_FLOAT:return v.as.f!=0.0;case NV_STR:return v.as.s&&v.as.s[0];case NV_LIST:return v.as.list&&v.as.list->len>0;case NV_DICT:return v.as.dict&&v.as.dict->len>0;case NV_OBJ:return 1;case NV_MEMORY:return v.as.memory&&!v.as.memory->freed;case NV_FILE:return v.as.file!=NULL;} return 0;}\n"
 "static double nv_num(NvVal v){ if(v.kind==NV_INT)return(double)v.as.i; if(v.kind==NV_FLOAT)return v.as.f; if(v.kind==NV_BOOL)return(double)v.as.b; nv_throw(\"Expected a numeric value\"); return 0;}\n"
+"static void nv_memory_shutdown(void){ NvMemory*m=nv_memory_head; size_t leaks=0,bytes=0; while(m){ NvMemory*next=m->next; if(!m->freed){leaks++;bytes+=m->size;} free(m); m=next; } nv_memory_head=NULL; if(leaks)fprintf(stderr,\"Clariox memory warning: %zu manual allocation(s) not freed (%zu bytes)\\n\",leaks,bytes); }\n"
+"static NvMemory *nv_memory_get(NvVal v){ if(v.kind!=NV_MEMORY||!v.as.memory)nv_throw(\"Expected a memory block\"); if(v.as.memory->freed)nv_throw(\"Memory block has already been freed\"); return v.as.memory; }\n"
+"static NvVal nv_memory_alloc(NvVal sizev){ long long n=(long long)nv_num(sizev); if(n<=0)nv_throw(\"alloc() size must be greater than zero\"); NvMemory*m=nv_xmalloc(sizeof(*m)); m->data=nv_xmalloc((size_t)n); memset(m->data,0,(size_t)n); m->size=(size_t)n; m->freed=0; m->next=nv_memory_head; nv_memory_head=m; if(!nv_memory_cleanup_registered){atexit(nv_memory_shutdown);nv_memory_cleanup_registered=1;} NvVal v=nv_none();v.kind=NV_MEMORY;v.as.memory=m;return v; }\n"
+"static NvVal nv_memory_free(NvVal v){ NvMemory*m=nv_memory_get(v); free(m->data); m->data=NULL; m->freed=1; return nv_none(); }\n"
+"static NvVal nv_memory_size(NvVal v){ NvMemory*m=nv_memory_get(v); return nv_int((long long)m->size); }\n"
+"static NvVal nv_memory_read(NvVal v,NvVal index){ NvMemory*m=nv_memory_get(v); long long i=(long long)nv_num(index); if(i<0||(unsigned long long)i>=(unsigned long long)m->size)nv_throw(\"Memory index out of range\"); return nv_int((long long)m->data[i]); }\n"
+"static NvVal nv_memory_write(NvVal v,NvVal index,NvVal value){ NvMemory*m=nv_memory_get(v); long long i=(long long)nv_num(index); long long x=(long long)nv_num(value); if(i<0||(unsigned long long)i>=(unsigned long long)m->size)nv_throw(\"Memory index out of range\"); if(x<0||x>255)nv_throw(\"Memory byte must be between 0 and 255\"); m->data[i]=(unsigned char)x; return nv_none(); }\n"
 "static NvVal nv_add(NvVal a,NvVal b){ if(a.kind==NV_STR&&b.kind==NV_STR){size_t n=strlen(a.as.s)+strlen(b.as.s)+1;char*p=nv_xmalloc(n);snprintf(p,n,\"%s%s\",a.as.s,b.as.s);NvVal v=nv_str(p);free(p);return v;} if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i+b.as.i); return nv_float(nv_num(a)+nv_num(b));}\n"
 "static NvVal nv_sub(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i-b.as.i); return nv_float(nv_num(a)-nv_num(b));}\n"
 "static NvVal nv_mul(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i*b.as.i); return nv_float(nv_num(a)*nv_num(b));}\n"
@@ -767,10 +781,10 @@ static const char *RUNTIME_C =
 "static NvVal nv_not(NvVal a){return nv_bool(!nv_truth(a));}\n"
 "static NvVal nv_and(NvVal a,NvVal b){return nv_bool(nv_truth(a)&&nv_truth(b));}\n"
 "static NvVal nv_or(NvVal a,NvVal b){return nv_bool(nv_truth(a)||nv_truth(b));}\n"
-"static int nv_same(NvVal a,NvVal b){ if(a.kind!=b.kind){if((a.kind==NV_INT||a.kind==NV_FLOAT||a.kind==NV_BOOL)&&(b.kind==NV_INT||b.kind==NV_FLOAT||b.kind==NV_BOOL))return nv_num(a)==nv_num(b);return 0;} switch(a.kind){case NV_NONE:return 1;case NV_INT:return a.as.i==b.as.i;case NV_FLOAT:return a.as.f==b.as.f;case NV_BOOL:return a.as.b==b.as.b;case NV_STR:return strcmp(a.as.s,b.as.s)==0;case NV_FILE:return a.as.file==b.as.file;default:return a.as.obj==b.as.obj;} }\n"
+"static int nv_same(NvVal a,NvVal b){ if(a.kind!=b.kind){if((a.kind==NV_INT||a.kind==NV_FLOAT||a.kind==NV_BOOL)&&(b.kind==NV_INT||b.kind==NV_FLOAT||b.kind==NV_BOOL))return nv_num(a)==nv_num(b);return 0;} switch(a.kind){case NV_NONE:return 1;case NV_INT:return a.as.i==b.as.i;case NV_FLOAT:return a.as.f==b.as.f;case NV_BOOL:return a.as.b==b.as.b;case NV_STR:return strcmp(a.as.s,b.as.s)==0;case NV_FILE:return a.as.file==b.as.file;case NV_MEMORY:return a.as.memory==b.as.memory;default:return a.as.obj==b.as.obj;} }\n"
 "static NvVal nv_eq(NvVal a,NvVal b){return nv_bool(nv_same(a,b));} static NvVal nv_ne(NvVal a,NvVal b){return nv_bool(!nv_same(a,b));}\n"
 "static NvVal nv_lt(NvVal a,NvVal b){return nv_bool(nv_num(a)<nv_num(b));} static NvVal nv_le(NvVal a,NvVal b){return nv_bool(nv_num(a)<=nv_num(b));} static NvVal nv_gt(NvVal a,NvVal b){return nv_bool(nv_num(a)>nv_num(b));} static NvVal nv_ge(NvVal a,NvVal b){return nv_bool(nv_num(a)>=nv_num(b));}\n"
-"static void nv_print_one(NvVal v){ switch(v.kind){case NV_NONE:printf(\"none\");break;case NV_INT:printf(\"%lld\",v.as.i);break;case NV_FLOAT:printf(\"%g\",v.as.f);break;case NV_BOOL:printf(\"%s\",v.as.b?\"true\":\"false\");break;case NV_STR:printf(\"%s\",v.as.s);break;case NV_LIST:printf(\"[\");for(int i=0;i<v.as.list->len;i++){if(i)printf(\", \");nv_print_one(v.as.list->items[i]);}printf(\"]\");break;case NV_DICT:printf(\"{\");for(int i=0;i<v.as.dict->len;i++){if(i)printf(\", \");printf(\"\\\"%s\\\": \",v.as.dict->keys[i]);nv_print_one(v.as.dict->vals[i]);}printf(\"}\");break;case NV_OBJ:printf(\"<%s>\",v.as.obj->type);break;case NV_FILE:printf(\"<file>\");break;} }\n"
+"static void nv_print_one(NvVal v){ switch(v.kind){case NV_NONE:printf(\"none\");break;case NV_INT:printf(\"%lld\",v.as.i);break;case NV_FLOAT:printf(\"%g\",v.as.f);break;case NV_BOOL:printf(\"%s\",v.as.b?\"true\":\"false\");break;case NV_STR:printf(\"%s\",v.as.s);break;case NV_LIST:printf(\"[\");for(int i=0;i<v.as.list->len;i++){if(i)printf(\", \");nv_print_one(v.as.list->items[i]);}printf(\"]\");break;case NV_DICT:printf(\"{\");for(int i=0;i<v.as.dict->len;i++){if(i)printf(\", \");printf(\"\\\"%s\\\": \",v.as.dict->keys[i]);nv_print_one(v.as.dict->vals[i]);}printf(\"}\");break;case NV_OBJ:printf(\"<%s>\",v.as.obj->type);break;case NV_MEMORY:if(!v.as.memory||v.as.memory->freed)printf(\"<memory freed>\");else printf(\"<memory %zu bytes>\",v.as.memory->size);break;case NV_FILE:printf(\"<file>\");break;} }\n"
 "static void nv_list_append(NvVal l,NvVal v){ if(l.kind!=NV_LIST)nv_throw(\"append() requires a list\"); NvList*p=l.as.list; if(p->len==p->cap){p->cap=p->cap?p->cap*2:8;p->items=realloc(p->items,sizeof(NvVal)*p->cap);} p->items[p->len++]=v;}\n"
 "static NvVal nv_range(NvVal a,NvVal b){ long long x=(long long)nv_num(a), y=(long long)nv_num(b); NvVal l=nv_list_new(); if(x<=y){for(long long i=x;i<y;i++)nv_list_append(l,nv_int(i));}else{for(long long i=x;i>y;i--)nv_list_append(l,nv_int(i));} return l;}\n"
 "static void nv_file_close(NvVal v){ if(v.kind==NV_FILE && v.as.file) fclose(v.as.file); }\n"
@@ -798,7 +812,7 @@ static const char *RUNTIME_C =
 "static void nv_dict_free_shallow(NvDict*d){if(!d)return;for(int i=0;i<d->len;i++)free(d->keys[i]);free(d->keys);free(d->vals);free(d);}\n"
 "static void nv_call_free(NvCall*c){if(!c)return;free(c->args);nv_dict_free_shallow(c->kw);c->args=NULL;c->kw=NULL;c->argc=0;c->cap=0;}\n"
 "static NvVal nv_arg(NvVal*args,int argc,NvDict*kw,int pos,const char*name){if(pos<argc)return args[pos];int i=nv_dict_find(kw,name);if(i>=0)return kw->vals[i];char buf[512];snprintf(buf,sizeof(buf),\"Missing argument: %s\",name);nv_throw(buf);return nv_none();}\n"
-"static void nv_expect_type(NvVal v,const char*t,const char*name){int ok=0;if(strcmp(t,\"int\")==0)ok=v.kind==NV_INT;else if(strcmp(t,\"float\")==0)ok=v.kind==NV_FLOAT||v.kind==NV_INT;else if(strcmp(t,\"str\")==0)ok=v.kind==NV_STR;else if(strcmp(t,\"bool\")==0)ok=v.kind==NV_BOOL;else if(strcmp(t,\"list\")==0)ok=v.kind==NV_LIST;else if(strcmp(t,\"dict\")==0)ok=v.kind==NV_DICT;else if(strcmp(t,\"object\")==0)ok=v.kind==NV_OBJ;else if(strcmp(t,\"file\")==0)ok=v.kind==NV_FILE;else ok=1;if(!ok){char buf[512];snprintf(buf,sizeof(buf),\"Invalid type for %s: expected %s\",name,t);nv_throw(buf);}}\n"
+"static void nv_expect_type(NvVal v,const char*t,const char*name){int ok=0;if(strcmp(t,\"int\")==0)ok=v.kind==NV_INT;else if(strcmp(t,\"float\")==0)ok=v.kind==NV_FLOAT||v.kind==NV_INT;else if(strcmp(t,\"str\")==0)ok=v.kind==NV_STR;else if(strcmp(t,\"bool\")==0)ok=v.kind==NV_BOOL;else if(strcmp(t,\"list\")==0)ok=v.kind==NV_LIST;else if(strcmp(t,\"dict\")==0)ok=v.kind==NV_DICT;else if(strcmp(t,\"object\")==0)ok=v.kind==NV_OBJ;else if(strcmp(t,\"file\")==0)ok=v.kind==NV_FILE;else if(strcmp(t,\"memory\")==0)ok=v.kind==NV_MEMORY;else ok=1;if(!ok){char buf[512];snprintf(buf,sizeof(buf),\"Invalid type for %s: expected %s\",name,t);nv_throw(buf);}}\n"
 "static NvVal nv_dispatch_call(const char*,NvVal*,int,NvDict*);\n"
 "static NvVal nv_dispatch_method(NvVal,const char*,NvVal*,int,NvDict*);\n"
 "\n";
@@ -1000,6 +1014,8 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"    if(strcmp(name,\"int\")==0){ if(argc<1)nv_throw(\"int() expects a value\"); if(args[0].kind==NV_INT)return args[0]; if(args[0].kind==NV_STR)return nv_int(strtoll(args[0].as.s,NULL,10)); return nv_int((long long)nv_num(args[0])); }\n");
     fprintf(out,"    if(strcmp(name,\"float\")==0){ if(argc<1)nv_throw(\"float() expects a value\"); if(args[0].kind==NV_STR)return nv_float(strtod(args[0].as.s,NULL)); return nv_float(nv_num(args[0])); }\n");
     fprintf(out,"    if(strcmp(name,\"str\")==0){ if(argc<1)nv_throw(\"str() expects a value\"); return nv_to_str(args[0]); }\n");
+    fprintf(out,"    if(strcmp(name,\"alloc\")==0){ if(argc!=1)nv_throw(\"alloc() expects exactly one size\"); return nv_memory_alloc(args[0]); }\n");
+    fprintf(out,"    if(strcmp(name,\"free\")==0){ if(argc!=1)nv_throw(\"free() expects exactly one memory block\"); return nv_memory_free(args[0]); }\n");
     fprintf(out,"    if(strcmp(name,\"open\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"open() expects a string path\"); const char*m=\"r\"; if(argc>1&&args[1].kind==NV_STR){ if(strcmp(args[1].as.s,\"read\")==0)m=\"r\"; else if(strcmp(args[1].as.s,\"write\")==0)m=\"w\"; else if(strcmp(args[1].as.s,\"append\")==0)m=\"a\"; else m=args[1].as.s;} FILE*f=fopen(args[0].as.s,m); if(!f)nv_throwf(\"Unable to open file: %%s\",args[0].as.s); return nv_file_value(f); }\n");
     fprintf(out,"    if(strcmp(name,\"read_file\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"read_file() expects a string path\"); FILE*f=fopen(args[0].as.s,\"r\"); if(!f)nv_throwf(\"Unable to open file: %%s\",args[0].as.s); NvVal fv=nv_file_value(f); NvVal r=nv_file_read(fv); fclose(f); return r; }\n");
     fprintf(out,"    if(strcmp(name,\"write_file\")==0){ if(argc<2||args[0].kind!=NV_STR)nv_throw(\"write_file() expects a path and a value\"); FILE*f=fopen(args[0].as.s,\"w\"); if(!f)nv_throwf(\"Unable to open file: %%s\",args[0].as.s); NvVal fv=nv_file_value(f); nv_file_write(fv,args[1]); fclose(f); return nv_none(); }\n");
@@ -1031,6 +1047,9 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"append\")==0){ if(argc<1)nv_throw(\"append() expects a value\"); nv_list_append(self,args[0]); return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"remove\")==0){ if(argc<1)nv_throw(\"remove() expects a value\"); for(int i=0;i<self.as.list->len;i++){if(nv_same(self.as.list->items[i],args[0])){for(int j=i;j<self.as.list->len-1;j++)self.as.list->items[j]=self.as.list->items[j+1];self.as.list->len--;return nv_none();}} return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_DICT && strcmp(name,\"keys\")==0){ NvVal l=nv_list_new(); for(int i=0;i<self.as.dict->len;i++)nv_list_append(l,nv_str(self.as.dict->keys[i])); return l; }\n");
+    fprintf(out,"    if(self.kind==NV_MEMORY && strcmp(name,\"size\")==0){ if(argc!=0)nv_throw(\"memory.size() expects no arguments\"); return nv_memory_size(self); }\n");
+    fprintf(out,"    if(self.kind==NV_MEMORY && strcmp(name,\"read\")==0){ if(argc!=1)nv_throw(\"memory.read() expects an index\"); return nv_memory_read(self,args[0]); }\n");
+    fprintf(out,"    if(self.kind==NV_MEMORY && strcmp(name,\"write\")==0){ if(argc!=2)nv_throw(\"memory.write() expects an index and a byte\"); return nv_memory_write(self,args[0],args[1]); }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"read\")==0) return nv_file_read(self);\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"write\")==0){ if(argc<1)nv_throw(\"file.write() expects a value\"); return nv_file_write(self,args[0]); }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"close\")==0){ nv_file_close(self); return nv_none(); }\n");
@@ -1136,6 +1155,50 @@ static void compile_source(FILE*in,const char*cfile){
 
         OutKind ok=current_output();FILE*out=out_for_kind(ok);if(!out)die("Line %d: invalid statement here",lineno);VarScope*scope=(ok==OUT_FUNC)?&func_scope:&main_scope;
         VarScope*consts=(ok==OUT_FUNC)?&func_consts:&main_consts;
+
+        /* allocation mémoire manuelle */
+        if(strncmp(s,"manual ",7)==0){
+            char rest[MAX_LINE];
+            snprintf(rest,sizeof(rest),"%s",trim(s+7));
+
+            int ol=0;
+            int ap=find_top_level_assignment(rest,&ol);
+
+            if(ap<0||ol!=1)
+                die("Line %d: use 'manual name = alloc(size)'",lineno);
+
+            char lhs[MAX_NAME],rhs[MAX_LINE];
+
+            snprintf(lhs,sizeof(lhs),"%.*s",ap,rest);
+            snprintf(rhs,sizeof(rhs),"%s",rest+ap+1);
+
+            char *vn=trim(lhs);
+            char *rv=trim(rhs);
+
+            if(!is_ident(vn))
+                die("Line %d: invalid manual variable name",lineno);
+
+            if(scope_has(scope,vn))
+                die("Line %d: variable '%s' is already defined",lineno,vn);
+
+            if(strncmp(rv,"alloc",5)!=0 ||
+               !(rv[5]=='(' || isspace((unsigned char)rv[5])))
+                die("Line %d: manual memory currently requires alloc(...)",lineno);
+
+            manual_alloc_context=1;
+            char *e=compile_expr(rv,lineno);
+            manual_alloc_context=0;
+
+            emit_indent(out,indent);
+            fprintf(out,"NvVal %s = %s;\n",vn,e);
+
+            emit_indent(out,indent);
+            fprintf(out,"nv_expect_type(%s, \"memory\", \"%s\");\n",vn,vn);
+
+            free(e);
+            scope_add(scope,vn);
+            continue;
+        }
 
         /* valeur fixe */
         if(strncmp(s,"const ",6)==0){

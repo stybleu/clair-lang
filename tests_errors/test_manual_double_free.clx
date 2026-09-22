@@ -1,0 +1,4 @@
+manual buffer = alloc(16)
+
+free(buffer)
+free(buffer)

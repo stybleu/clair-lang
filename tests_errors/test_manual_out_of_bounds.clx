@@ -1,0 +1,3 @@
+manual buffer = alloc(4)
+
+buffer.write(4, 42)

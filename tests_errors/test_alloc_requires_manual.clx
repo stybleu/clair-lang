@@ -1,0 +1,3 @@
+buffer = alloc(16)
+
+print(buffer)

@@ -1,0 +1,13 @@
+manual buffer = alloc(8)
+
+buffer.write(0, 65)
+buffer.write(1, 66)
+buffer.write(2, 67)
+
+print("Memory:", buffer)
+print("Size:", buffer.size())
+print("Bytes:", buffer.read(0), buffer.read(1), buffer.read(2))
+
+free(buffer)
+
+print("After free:", buffer)
