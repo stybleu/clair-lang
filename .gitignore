@@ -80,3 +80,30 @@ __pycache__/
 
 # Clariox test logs
 .test_logs/
+
+# === Clariox generated files ===
+.test_logs/
+.clariox_*
+/clarioxc
+
+/test_alias
+/test_boucle_concat
+/test_concat
+/test_index
+/test_memoire
+/test_reaffectation
+/test_liste_ajoute
+/test_liste_lecture
+/test_table_ecriture
+/test_table_lecture
+
+/test_alias.c
+/test_boucle_concat.c
+/test_concat.c
+/test_index.c
+/test_memoire.c
+/test_reaffectation.c
+/test_liste_ajoute.c
+/test_liste_lecture.c
+/test_table_ecriture.c
+/test_table_lecture.c
