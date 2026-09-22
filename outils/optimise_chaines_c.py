@@ -1371,6 +1371,29 @@ def main():
             for native_name in native:
                 rhs = replace_length(rhs, native_name)
 
+            # CLAIR_INDEX_ASSIGN_AVANT_STRING_CODE
+            # Une indexation affectée à une chaîne native doit
+            # COPIER le caractère, et non déplacer une vue
+            # pointant dans le stockage de la chaîne source.
+            index_assignment = native_string_index(
+                rhs,
+                native
+            )
+
+            if index_assignment is not None:
+                source_code, index_code = index_assignment
+                indent = m_assign.group(1)
+
+                new_line = (
+                    f"{indent}clair_string_assign_char("
+                    f"&{name}, "
+                    f"{source_code}, "
+                    f"(long long)({index_code})"
+                    f");\n"
+                )
+
+                break
+
             native_rhs = string_code(
                 rhs,
                 native
