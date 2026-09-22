@@ -46,3 +46,34 @@ __pycache__/
 *~
 *.swp
 /bench_avant_entiers.c
+
+# === Clair : fichiers générés localement ===
+
+# C généré par les benchmarks/tests
+/bench_*.c
+/test_*.c
+
+# Exécutables de benchmarks/tests
+/bench_*
+/test_*
+
+# Mais conserver les sources et tests
+!/*.clair
+!/*.sh
+
+# Résultats de benchmarks
+/result_*.txt
+/time_*.txt
+
+# Sauvegardes temporaires
+/*.avant_*
+/*.backup_*
+/outils/*_avant_*.py
+/outils/*.avant_*
+
+# Compilateurs temporaires
+/clairc_new
+/clairc_v*
+
+# Scripts de patch temporaires
+/patch_*.py

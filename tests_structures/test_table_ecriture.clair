@@ -1,0 +1,6 @@
+infos = {"valeur": 0}
+
+pour i dans plage(5000000):
+    infos["valeur"] = i
+
+ecris("Final :", infos["valeur"])

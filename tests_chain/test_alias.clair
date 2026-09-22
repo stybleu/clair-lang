@@ -1,0 +1,7 @@
+a = "Alice"
+b = a
+
+a = "Alex"
+
+ecris(a)
+ecris(b)

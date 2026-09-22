@@ -1,0 +1,8 @@
+nombres = []
+
+pour i dans plage(100000):
+    nombres.ajoute(i)
+
+ecris("Longueur :", longueur(nombres))
+ecris("Premier :", nombres[0])
+ecris("Dernier :", nombres[99999])

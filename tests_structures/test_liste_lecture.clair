@@ -1,0 +1,9 @@
+nombres = [10, 20, 30, 40]
+somme = 0
+
+pour i dans plage(5000000):
+    indice = i % 4
+    somme = somme + nombres[indice]
+
+ecris("Somme :", somme)
+ecris("Liste :", nombres)

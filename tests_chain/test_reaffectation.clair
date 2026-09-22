@@ -1,0 +1,8 @@
+texte = "Alice"
+ecris(texte)
+
+texte = "Alexandria"
+ecris(texte)
+
+texte = "Clair"
+ecris(texte)

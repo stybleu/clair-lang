@@ -1,0 +1,19 @@
+a = "Al"
+b = "ice"
+c = "Alex"
+d = "andria"
+
+texte = ""
+somme = 0
+
+pour i dans plage(1000000):
+    si i % 2 == 0:
+        texte = a + b
+    sinon:
+        texte = c + d
+
+    si texte[0] == "A":
+        somme = somme + 1
+
+ecris("Somme :", somme)
+ecris("Final :", texte)

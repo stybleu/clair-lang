@@ -1,0 +1,11 @@
+infos = {"a": 10, "b": 20}
+somme = 0
+
+pour i dans plage(5000000):
+    si i % 2 == 0:
+        somme = somme + infos["a"]
+    sinon:
+        somme = somme + infos["b"]
+
+ecris("Somme :", somme)
+ecris("Table :", infos)

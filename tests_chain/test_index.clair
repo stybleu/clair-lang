@@ -1,0 +1,5 @@
+texte = "Clair"
+
+ecris(texte[0])
+ecris(texte[1])
+ecris(texte[4])
