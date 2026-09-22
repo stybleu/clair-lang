@@ -30,7 +30,7 @@ static void die(const char *fmt, ...) {
 static char *xstrdup(const char *s) {
     size_t n = strlen(s) + 1;
     char *p = (char*)malloc(n);
-    if (!p) die("Mémoire insuffisante");
+    if (!p) die("Out of memory");
     memcpy(p, s, n);
     return p;
 }
@@ -42,9 +42,9 @@ static char *fmtdup(const char *fmt, ...) {
     va_copy(cp, ap);
     int n = vsnprintf(NULL, 0, fmt, cp);
     va_end(cp);
-    if (n < 0) die("Erreur de formatage");
+    if (n < 0) die("Formatting error");
     char *buf = (char*)malloc((size_t)n + 1);
-    if (!buf) die("Mémoire insuffisante");
+    if (!buf) die("Out of memory");
     vsnprintf(buf, (size_t)n + 1, fmt, ap);
     va_end(ap);
     return buf;
@@ -266,7 +266,7 @@ static void lex_one(Lexer *lx, Token *t) {
             if (s[i]=='"') { i++; break; }
             i++;
         }
-        if (s[i-1] != '"') die("Erreur ligne %d : texte non fermé", lx->lineno);
+        if (s[i-1] != '"') die("Line %d: unterminated string", lx->lineno);
         size_t n = i-st;
         if (n >= sizeof(t->text)) n = sizeof(t->text)-1;
         memcpy(t->text, s+st, n); t->text[n]='\0';
@@ -311,7 +311,7 @@ static void lex_one(Lexer *lx, Token *t) {
             else t->kind=TK_GT;
             return;
     }
-    die("Erreur ligne %d : caractère inattendu '%c'", lx->lineno, c);
+    die("Line %d: unexpected character '%c'", lx->lineno, c);
 }
 
 static void lexer_init(Lexer *lx, const char *src, int lineno) {
@@ -332,7 +332,7 @@ static int is_kw(Lexer *lx, const char *kw) {
 }
 
 static void expect(Lexer *lx, TokenKind k, const char *what) {
-    if (lx->cur.kind != k) die("Erreur ligne %d : %s attendu", lx->lineno, what);
+    if (lx->cur.kind != k) die("Line %d: expected %s", lx->lineno, what);
 }
 
 /* ============================
@@ -363,7 +363,7 @@ static char *compile_interpolated_string(const char *token, int lineno) {
     for (size_t i = 1; i + 1 < n; ) {
         char c = token[i];
         if (c == '\\' && i + 1 < n - 1) {
-            if (li + 2 >= sizeof(lit)) die("Erreur ligne %d : texte interpolé trop long", lineno);
+            if (li + 2 >= sizeof(lit)) die("Line %d: interpolated string is too long", lineno);
             lit[li++] = token[i++]; lit[li++] = token[i++]; continue;
         }
         if (c == '{' && token[i+1] == '{') { lit[li++] = '{'; i += 2; continue; }
@@ -377,9 +377,9 @@ static char *compile_interpolated_string(const char *token, int lineno) {
             }
             size_t j = i + 1;
             while (j < n - 1 && token[j] != '}') j++;
-            if (j >= n - 1) die("Erreur ligne %d : '}' manquant dans le texte interpolé", lineno);
+            if (j >= n - 1) die("Line %d: missing '}' in interpolated string", lineno);
             size_t en = j - i - 1;
-            if (!en || en >= 2048) die("Erreur ligne %d : interpolation invalide", lineno);
+            if (!en || en >= 2048) die("Line %d: invalid interpolation", lineno);
             char expr[2048]; memcpy(expr, token+i+1, en); expr[en] = '\0';
             char *e = compile_expr(trim(expr), lineno);
             char *part = fmtdup("nv_to_str(%s)", e);
@@ -387,7 +387,7 @@ static char *compile_interpolated_string(const char *token, int lineno) {
             free(e); free(part); free(acc); acc = tmp;
             i = j + 1; continue;
         }
-        if (li + 1 >= sizeof(lit)) die("Erreur ligne %d : texte interpolé trop long", lineno);
+        if (li + 1 >= sizeof(lit)) die("Line %d: interpolated string is too long", lineno);
         lit[li++] = c; i++;
     }
     if (li) {
@@ -525,7 +525,7 @@ static char *parse_primary(Lexer *lx) {
                     snprintf(key, sizeof(key), "\"%s\"", lx->cur.text);
                     advance(lx);
                 } else {
-                    die("Erreur ligne %d : clé de table invalide", lx->lineno);
+                    die("Line %d: invalid dict key", lx->lineno);
                 }
                 expect(lx, TK_COLON, ":"); advance(lx);
                 char *e = parse_expr(lx);
@@ -546,7 +546,7 @@ static char *parse_primary(Lexer *lx) {
         return xstrdup(name);
     }
 
-    die("Erreur ligne %d : expression invalide", lx->lineno);
+    die("Line %d: invalid expression", lx->lineno);
     return NULL;
 }
 
@@ -669,7 +669,7 @@ static char *parse_expr(Lexer *lx) {
 static char *compile_expr(const char *src, int lineno) {
     Lexer lx; lexer_init(&lx, src, lineno);
     char *e = parse_expr(&lx);
-    if (lx.cur.kind != TK_EOF) die("Erreur ligne %d : élément inattendu '%s'", lineno, lx.cur.text);
+    if (lx.cur.kind != TK_EOF) die("Line %d: unexpected element '%s'", lineno, lx.cur.text);
     return e;
 }
 
@@ -702,7 +702,7 @@ static const char *RUNTIME_C =
 "static NvTryFrame *nv_try_top = NULL;\n"
 "static char nv_error_message[1024] = {0};\n"
 "\n"
-"static void *nv_xmalloc(size_t n){ void *p=malloc(n?n:1); if(!p){fprintf(stderr,\"Mémoire insuffisante\\n\"); exit(2);} return p;}\n"
+"static void *nv_xmalloc(size_t n){ void *p=malloc(n?n:1); if(!p){fprintf(stderr,\"Out of memory\\n\"); exit(2);} return p;}\n"
 "static char *nv_strdup(const char *s){ size_t n=strlen(s)+1; char *p=nv_xmalloc(n); memcpy(p,s,n); return p;}\n"
 "/* NV_STRING_INTERN_V2 */\n"
 "typedef struct NvInternStr {\n"
@@ -752,16 +752,16 @@ static const char *RUNTIME_C =
 "static NvVal nv_dict_new_value(void){ NvVal v=nv_none(); v.kind=NV_DICT; v.as.dict=nv_dict_new(); return v;}\n"
 "static NvVal nv_list_new(void){ NvVal v=nv_none(); v.kind=NV_LIST; v.as.list=nv_xmalloc(sizeof(NvList)); v.as.list->items=NULL; v.as.list->len=0; v.as.list->cap=0; return v;}\n"
 "static NvVal nv_file_value(FILE *f){ NvVal v=nv_none(); v.kind=NV_FILE; v.as.file=f; return v;}\n"
-"static NvVal nv_to_str(NvVal v){ char b[256]; switch(v.kind){case NV_STR:return nv_str(v.as.s);case NV_NONE:return nv_str(\"none\");case NV_INT:snprintf(b,sizeof(b),\"%lld\",v.as.i);return nv_str(b);case NV_FLOAT:snprintf(b,sizeof(b),\"%g\",v.as.f);return nv_str(b);case NV_BOOL:return nv_str(v.as.b?\"true\":\"false\");case NV_LIST:return nv_str(\"<liste>\");case NV_DICT:return nv_str(\"<table>\");case NV_OBJ:snprintf(b,sizeof(b),\"<%s>\",v.as.obj->type);return nv_str(b);case NV_FILE:return nv_str(\"<fichier>\");}return nv_str(\"\");}\n"
-"static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error_message),\"%s\",msg); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Erreur Clariox : %s\\n\",msg); exit(1);}\n"
-"static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Erreur Clariox : %s\\n\",nv_error_message); exit(1);}\n"
+"static NvVal nv_to_str(NvVal v){ char b[256]; switch(v.kind){case NV_STR:return nv_str(v.as.s);case NV_NONE:return nv_str(\"none\");case NV_INT:snprintf(b,sizeof(b),\"%lld\",v.as.i);return nv_str(b);case NV_FLOAT:snprintf(b,sizeof(b),\"%g\",v.as.f);return nv_str(b);case NV_BOOL:return nv_str(v.as.b?\"true\":\"false\");case NV_LIST:return nv_str(\"<list>\");case NV_DICT:return nv_str(\"<dict>\");case NV_OBJ:snprintf(b,sizeof(b),\"<%s>\",v.as.obj->type);return nv_str(b);case NV_FILE:return nv_str(\"<file>\");}return nv_str(\"\");}\n"
+"static void nv_throw(const char *msg){ snprintf(nv_error_message,sizeof(nv_error_message),\"%s\",msg); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Clariox error: %s\\n\",msg); exit(1);}\n"
+"static void nv_throwf(const char *fmt,const char *a){ snprintf(nv_error_message,sizeof(nv_error_message),fmt,a); if(nv_try_top) longjmp(nv_try_top->env,1); fprintf(stderr,\"Clariox error: %s\\n\",nv_error_message); exit(1);}\n"
 "static int nv_truth(NvVal v){ switch(v.kind){case NV_NONE:return 0;case NV_BOOL:return v.as.b;case NV_INT:return v.as.i!=0;case NV_FLOAT:return v.as.f!=0.0;case NV_STR:return v.as.s&&v.as.s[0];case NV_LIST:return v.as.list&&v.as.list->len>0;case NV_DICT:return v.as.dict&&v.as.dict->len>0;case NV_OBJ:return 1;case NV_FILE:return v.as.file!=NULL;} return 0;}\n"
-"static double nv_num(NvVal v){ if(v.kind==NV_INT)return(double)v.as.i; if(v.kind==NV_FLOAT)return v.as.f; if(v.kind==NV_BOOL)return(double)v.as.b; nv_throw(\"Une valeur numérique était attendue\"); return 0;}\n"
+"static double nv_num(NvVal v){ if(v.kind==NV_INT)return(double)v.as.i; if(v.kind==NV_FLOAT)return v.as.f; if(v.kind==NV_BOOL)return(double)v.as.b; nv_throw(\"Expected a numeric value\"); return 0;}\n"
 "static NvVal nv_add(NvVal a,NvVal b){ if(a.kind==NV_STR&&b.kind==NV_STR){size_t n=strlen(a.as.s)+strlen(b.as.s)+1;char*p=nv_xmalloc(n);snprintf(p,n,\"%s%s\",a.as.s,b.as.s);NvVal v=nv_str(p);free(p);return v;} if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i+b.as.i); return nv_float(nv_num(a)+nv_num(b));}\n"
 "static NvVal nv_sub(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i-b.as.i); return nv_float(nv_num(a)-nv_num(b));}\n"
 "static NvVal nv_mul(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i*b.as.i); return nv_float(nv_num(a)*nv_num(b));}\n"
-"static NvVal nv_div(NvVal a,NvVal b){ double d=nv_num(b); if(d==0.0)nv_throw(\"Division par zéro\"); return nv_float(nv_num(a)/d);}\n"
-"static NvVal nv_mod(NvVal a,NvVal b){ long long x=(long long)nv_num(a), y=(long long)nv_num(b); if(!y)nv_throw(\"Modulo par zéro\"); return nv_int(x%y);}\n"
+"static NvVal nv_div(NvVal a,NvVal b){ double d=nv_num(b); if(d==0.0)nv_throw(\"Division by zero\"); return nv_float(nv_num(a)/d);}\n"
+"static NvVal nv_mod(NvVal a,NvVal b){ long long x=(long long)nv_num(a), y=(long long)nv_num(b); if(!y)nv_throw(\"Modulo by zero\"); return nv_int(x%y);}\n"
 "static NvVal nv_pow(NvVal a,NvVal b){ return nv_float(pow(nv_num(a),nv_num(b)));}\n"
 "static NvVal nv_neg(NvVal a){ if(a.kind==NV_INT)return nv_int(-a.as.i); return nv_float(-nv_num(a));}\n"
 "static NvVal nv_not(NvVal a){return nv_bool(!nv_truth(a));}\n"
@@ -770,35 +770,35 @@ static const char *RUNTIME_C =
 "static int nv_same(NvVal a,NvVal b){ if(a.kind!=b.kind){if((a.kind==NV_INT||a.kind==NV_FLOAT||a.kind==NV_BOOL)&&(b.kind==NV_INT||b.kind==NV_FLOAT||b.kind==NV_BOOL))return nv_num(a)==nv_num(b);return 0;} switch(a.kind){case NV_NONE:return 1;case NV_INT:return a.as.i==b.as.i;case NV_FLOAT:return a.as.f==b.as.f;case NV_BOOL:return a.as.b==b.as.b;case NV_STR:return strcmp(a.as.s,b.as.s)==0;case NV_FILE:return a.as.file==b.as.file;default:return a.as.obj==b.as.obj;} }\n"
 "static NvVal nv_eq(NvVal a,NvVal b){return nv_bool(nv_same(a,b));} static NvVal nv_ne(NvVal a,NvVal b){return nv_bool(!nv_same(a,b));}\n"
 "static NvVal nv_lt(NvVal a,NvVal b){return nv_bool(nv_num(a)<nv_num(b));} static NvVal nv_le(NvVal a,NvVal b){return nv_bool(nv_num(a)<=nv_num(b));} static NvVal nv_gt(NvVal a,NvVal b){return nv_bool(nv_num(a)>nv_num(b));} static NvVal nv_ge(NvVal a,NvVal b){return nv_bool(nv_num(a)>=nv_num(b));}\n"
-"static void nv_print_one(NvVal v){ switch(v.kind){case NV_NONE:printf(\"none\");break;case NV_INT:printf(\"%lld\",v.as.i);break;case NV_FLOAT:printf(\"%g\",v.as.f);break;case NV_BOOL:printf(\"%s\",v.as.b?\"true\":\"false\");break;case NV_STR:printf(\"%s\",v.as.s);break;case NV_LIST:printf(\"[\");for(int i=0;i<v.as.list->len;i++){if(i)printf(\", \");nv_print_one(v.as.list->items[i]);}printf(\"]\");break;case NV_DICT:printf(\"{\");for(int i=0;i<v.as.dict->len;i++){if(i)printf(\", \");printf(\"\\\"%s\\\": \",v.as.dict->keys[i]);nv_print_one(v.as.dict->vals[i]);}printf(\"}\");break;case NV_OBJ:printf(\"<%s>\",v.as.obj->type);break;case NV_FILE:printf(\"<fichier>\");break;} }\n"
-"static void nv_list_append(NvVal l,NvVal v){ if(l.kind!=NV_LIST)nv_throw(\"append() nécessite une liste\"); NvList*p=l.as.list; if(p->len==p->cap){p->cap=p->cap?p->cap*2:8;p->items=realloc(p->items,sizeof(NvVal)*p->cap);} p->items[p->len++]=v;}\n"
+"static void nv_print_one(NvVal v){ switch(v.kind){case NV_NONE:printf(\"none\");break;case NV_INT:printf(\"%lld\",v.as.i);break;case NV_FLOAT:printf(\"%g\",v.as.f);break;case NV_BOOL:printf(\"%s\",v.as.b?\"true\":\"false\");break;case NV_STR:printf(\"%s\",v.as.s);break;case NV_LIST:printf(\"[\");for(int i=0;i<v.as.list->len;i++){if(i)printf(\", \");nv_print_one(v.as.list->items[i]);}printf(\"]\");break;case NV_DICT:printf(\"{\");for(int i=0;i<v.as.dict->len;i++){if(i)printf(\", \");printf(\"\\\"%s\\\": \",v.as.dict->keys[i]);nv_print_one(v.as.dict->vals[i]);}printf(\"}\");break;case NV_OBJ:printf(\"<%s>\",v.as.obj->type);break;case NV_FILE:printf(\"<file>\");break;} }\n"
+"static void nv_list_append(NvVal l,NvVal v){ if(l.kind!=NV_LIST)nv_throw(\"append() requires a list\"); NvList*p=l.as.list; if(p->len==p->cap){p->cap=p->cap?p->cap*2:8;p->items=realloc(p->items,sizeof(NvVal)*p->cap);} p->items[p->len++]=v;}\n"
 "static NvVal nv_range(NvVal a,NvVal b){ long long x=(long long)nv_num(a), y=(long long)nv_num(b); NvVal l=nv_list_new(); if(x<=y){for(long long i=x;i<y;i++)nv_list_append(l,nv_int(i));}else{for(long long i=x;i>y;i--)nv_list_append(l,nv_int(i));} return l;}\n"
 "static void nv_file_close(NvVal v){ if(v.kind==NV_FILE && v.as.file) fclose(v.as.file); }\n"
-"static NvVal nv_file_read(NvVal v){ if(v.kind!=NV_FILE||!v.as.file)nv_throw(\"Fichier non ouvert\"); if(fseek(v.as.file,0,SEEK_END)!=0)nv_throw(\"Impossible de lire le fichier\"); long n=ftell(v.as.file); if(n<0)nv_throw(\"Impossible de lire le fichier\"); rewind(v.as.file); char *buf=nv_xmalloc((size_t)n+1); size_t got=fread(buf,1,(size_t)n,v.as.file); buf[got]='\\0'; NvVal r=nv_str(buf); free(buf); return r;}\n"
-"static NvVal nv_file_write(NvVal v,NvVal data){ if(v.kind!=NV_FILE||!v.as.file)nv_throw(\"Fichier non ouvert\"); NvVal t=nv_to_str(data); fputs(t.as.s,v.as.file); fflush(v.as.file); return nv_none();}\n"
-"static void nv_list_extend(NvVal l,NvVal other){ if(l.kind!=NV_LIST||other.kind!=NV_LIST)nv_throw(\"Le déballage * nécessite une liste\"); for(int i=0;i<other.as.list->len;i++)nv_list_append(l,other.as.list->items[i]);}\n"
+"static NvVal nv_file_read(NvVal v){ if(v.kind!=NV_FILE||!v.as.file)nv_throw(\"File is not open\"); if(fseek(v.as.file,0,SEEK_END)!=0)nv_throw(\"Unable to read file\"); long n=ftell(v.as.file); if(n<0)nv_throw(\"Unable to read file\"); rewind(v.as.file); char *buf=nv_xmalloc((size_t)n+1); size_t got=fread(buf,1,(size_t)n,v.as.file); buf[got]='\\0'; NvVal r=nv_str(buf); free(buf); return r;}\n"
+"static NvVal nv_file_write(NvVal v,NvVal data){ if(v.kind!=NV_FILE||!v.as.file)nv_throw(\"File is not open\"); NvVal t=nv_to_str(data); fputs(t.as.s,v.as.file); fflush(v.as.file); return nv_none();}\n"
+"static void nv_list_extend(NvVal l,NvVal other){ if(l.kind!=NV_LIST||other.kind!=NV_LIST)nv_throw(\"Unpacking * requires a list\"); for(int i=0;i<other.as.list->len;i++)nv_list_append(l,other.as.list->items[i]);}\n"
 "static int nv_dict_find(NvDict*d,const char*k){for(int i=0;i<d->len;i++)if(strcmp(d->keys[i],k)==0)return i;return-1;}\n"
-"static NvVal nv_contains(NvVal container,NvVal item){ if(container.kind==NV_LIST){for(int i=0;i<container.as.list->len;i++)if(nv_same(container.as.list->items[i],item))return nv_bool(1);return nv_bool(0);} if(container.kind==NV_DICT){if(item.kind!=NV_STR)return nv_bool(0);return nv_bool(nv_dict_find(container.as.dict,item.as.s)>=0);} if(container.kind==NV_STR){if(item.kind!=NV_STR)return nv_bool(0);return nv_bool(strstr(container.as.s,item.as.s)!=NULL);} nv_throw(\"'dans' nécessite une liste, une table ou un texte\");return nv_bool(0);}\n"
+"static NvVal nv_contains(NvVal container,NvVal item){ if(container.kind==NV_LIST){for(int i=0;i<container.as.list->len;i++)if(nv_same(container.as.list->items[i],item))return nv_bool(1);return nv_bool(0);} if(container.kind==NV_DICT){if(item.kind!=NV_STR)return nv_bool(0);return nv_bool(nv_dict_find(container.as.dict,item.as.s)>=0);} if(container.kind==NV_STR){if(item.kind!=NV_STR)return nv_bool(0);return nv_bool(strstr(container.as.s,item.as.s)!=NULL);} nv_throw(\"'in' requires a list, dict, or string\");return nv_bool(0);}\n"
 "static void nv_dict_set(NvDict*d,const char*k,NvVal v){int i=nv_dict_find(d,k);if(i>=0){d->vals[i]=v;return;}if(d->len==d->cap){d->cap=d->cap?d->cap*2:8;d->keys=realloc(d->keys,sizeof(char*)*d->cap);d->vals=realloc(d->vals,sizeof(NvVal)*d->cap);}d->keys[d->len]=nv_strdup(k);d->vals[d->len]=v;d->len++;}\n"
-"static void nv_dict_set_value(NvVal d,const char*k,NvVal v){if(d.kind!=NV_DICT)nv_throw(\"Une table était attendue\");nv_dict_set(d.as.dict,k,v);}\n"
-"static void nv_dict_merge_value(NvVal d,NvVal src){if(d.kind!=NV_DICT||src.kind!=NV_DICT)nv_throw(\"Le déballage ** nécessite une table\");for(int i=0;i<src.as.dict->len;i++)nv_dict_set(d.as.dict,src.as.dict->keys[i],src.as.dict->vals[i]);}\n"
-"static NvVal nv_dict_get(NvDict*d,const char*k){int i=nv_dict_find(d,k);if(i<0){char buf[512];snprintf(buf,sizeof(buf),\"Clé introuvable : %s\",k);nv_throw(buf);}return d->vals[i];}\n"
-"static NvVal nv_get_index(NvVal a,NvVal i){ if(a.kind==NV_LIST){long long n=(long long)nv_num(i);if(n<0)n=a.as.list->len+n;if(n<0||n>=a.as.list->len)nv_throw(\"Indice de liste hors limites\");return a.as.list->items[n];} if(a.kind==NV_DICT){if(i.kind!=NV_STR)nv_throw(\"Une clé texte était attendue\");return nv_dict_get(a.as.dict,i.as.s);} if(a.kind==NV_STR){long long n=(long long)nv_num(i);int len=(int)strlen(a.as.s);if(n<0)n=len+n;if(n<0||n>=len)nv_throw(\"Indice de texte hors limites\");char tmp[2]={a.as.s[n],0};return nv_str(tmp);} nv_throw(\"Cette valeur ne peut pas être indexée\");return nv_none();}\n"
-"static void nv_set_index(NvVal a,NvVal i,NvVal v){ if(a.kind==NV_LIST){long long n=(long long)nv_num(i);if(n<0)n=a.as.list->len+n;if(n<0||n>=a.as.list->len)nv_throw(\"Indice de liste hors limites\");a.as.list->items[n]=v;return;} if(a.kind==NV_DICT){if(i.kind!=NV_STR)nv_throw(\"Une clé texte était attendue\");nv_dict_set(a.as.dict,i.as.s,v);return;} nv_throw(\"Cette valeur ne peut pas recevoir un index\");}\n"
+"static void nv_dict_set_value(NvVal d,const char*k,NvVal v){if(d.kind!=NV_DICT)nv_throw(\"Expected a dict\");nv_dict_set(d.as.dict,k,v);}\n"
+"static void nv_dict_merge_value(NvVal d,NvVal src){if(d.kind!=NV_DICT||src.kind!=NV_DICT)nv_throw(\"Unpacking ** requires a dict\");for(int i=0;i<src.as.dict->len;i++)nv_dict_set(d.as.dict,src.as.dict->keys[i],src.as.dict->vals[i]);}\n"
+"static NvVal nv_dict_get(NvDict*d,const char*k){int i=nv_dict_find(d,k);if(i<0){char buf[512];snprintf(buf,sizeof(buf),\"Key not found: %s\",k);nv_throw(buf);}return d->vals[i];}\n"
+"static NvVal nv_get_index(NvVal a,NvVal i){ if(a.kind==NV_LIST){long long n=(long long)nv_num(i);if(n<0)n=a.as.list->len+n;if(n<0||n>=a.as.list->len)nv_throw(\"List index out of range\");return a.as.list->items[n];} if(a.kind==NV_DICT){if(i.kind!=NV_STR)nv_throw(\"Expected a string key\");return nv_dict_get(a.as.dict,i.as.s);} if(a.kind==NV_STR){long long n=(long long)nv_num(i);int len=(int)strlen(a.as.s);if(n<0)n=len+n;if(n<0||n>=len)nv_throw(\"String index out of range\");char tmp[2]={a.as.s[n],0};return nv_str(tmp);} nv_throw(\"This value is not indexable\");return nv_none();}\n"
+"static void nv_set_index(NvVal a,NvVal i,NvVal v){ if(a.kind==NV_LIST){long long n=(long long)nv_num(i);if(n<0)n=a.as.list->len+n;if(n<0||n>=a.as.list->len)nv_throw(\"List index out of range\");a.as.list->items[n]=v;return;} if(a.kind==NV_DICT){if(i.kind!=NV_STR)nv_throw(\"Expected a string key\");nv_dict_set(a.as.dict,i.as.s,v);return;} nv_throw(\"This value does not support indexed assignment\");}\n"
 "static NvVal nv_get_field(NvVal a,const char*name){if(a.kind!=NV_OBJ)nv_throw(\"Accès à un champ sur une valeur qui n'est pas un objet\");return nv_dict_get(a.as.obj->fields,name);}\n"
 "static void nv_set_field(NvVal a,const char*name,NvVal v){if(a.kind!=NV_OBJ)nv_throw(\"Affectation de champ sur une valeur qui n'est pas un objet\");nv_dict_set(a.as.obj->fields,name,v);}\n"
 "static NvVal nv_object_new(const char*type){NvVal v=nv_none();v.kind=NV_OBJ;v.as.obj=nv_xmalloc(sizeof(NvObj));v.as.obj->type=nv_strdup(type);v.as.obj->fields=nv_dict_new();return v;}\n"
-"static int nv_len(NvVal v){if(v.kind==NV_LIST)return v.as.list->len;if(v.kind==NV_DICT)return v.as.dict->len;if(v.kind==NV_STR)return(int)strlen(v.as.s);nv_throw(\"len() nécessite une liste, une table ou un texte\");return 0;}\n"
-"static NvVal nv_iter_get(NvVal v,int i){if(v.kind==NV_LIST)return v.as.list->items[i];if(v.kind==NV_DICT)return nv_str(v.as.dict->keys[i]);if(v.kind==NV_STR){char t[2]={v.as.s[i],0};return nv_str(t);}nv_throw(\"Cette valeur n'est pas parcourable\");return nv_none();}\n"
+"static int nv_len(NvVal v){if(v.kind==NV_LIST)return v.as.list->len;if(v.kind==NV_DICT)return v.as.dict->len;if(v.kind==NV_STR)return(int)strlen(v.as.s);nv_throw(\"len() requires a list, dict, or string\");return 0;}\n"
+"static NvVal nv_iter_get(NvVal v,int i){if(v.kind==NV_LIST)return v.as.list->items[i];if(v.kind==NV_DICT)return nv_str(v.as.dict->keys[i]);if(v.kind==NV_STR){char t[2]={v.as.s[i],0};return nv_str(t);}nv_throw(\"This value is not iterable\");return nv_none();}\n"
 "static NvCall nv_call_new(void){NvCall c;c.args=NULL;c.argc=0;c.cap=0;c.kw=nv_dict_new();return c;}\n"
 "static void nv_call_add(NvCall*c,NvVal v){if(c->argc==c->cap){c->cap=c->cap?c->cap*2:8;c->args=realloc(c->args,sizeof(NvVal)*c->cap);}c->args[c->argc++]=v;}\n"
-"static void nv_call_spread(NvCall*c,NvVal v){if(v.kind!=NV_LIST)nv_throw(\"Le déballage * nécessite une liste\");for(int i=0;i<v.as.list->len;i++)nv_call_add(c,v.as.list->items[i]);}\n"
+"static void nv_call_spread(NvCall*c,NvVal v){if(v.kind!=NV_LIST)nv_throw(\"Unpacking * requires a list\");for(int i=0;i<v.as.list->len;i++)nv_call_add(c,v.as.list->items[i]);}\n"
 "static void nv_call_kw(NvCall*c,const char*k,NvVal v){nv_dict_set(c->kw,k,v);}\n"
-"static void nv_call_kwspread(NvCall*c,NvVal v){if(v.kind!=NV_DICT)nv_throw(\"Le déballage ** nécessite une table\");for(int i=0;i<v.as.dict->len;i++)nv_dict_set(c->kw,v.as.dict->keys[i],v.as.dict->vals[i]);}\n"
+"static void nv_call_kwspread(NvCall*c,NvVal v){if(v.kind!=NV_DICT)nv_throw(\"Unpacking ** requires a dict\");for(int i=0;i<v.as.dict->len;i++)nv_dict_set(c->kw,v.as.dict->keys[i],v.as.dict->vals[i]);}\n"
 "static void nv_dict_free_shallow(NvDict*d){if(!d)return;for(int i=0;i<d->len;i++)free(d->keys[i]);free(d->keys);free(d->vals);free(d);}\n"
 "static void nv_call_free(NvCall*c){if(!c)return;free(c->args);nv_dict_free_shallow(c->kw);c->args=NULL;c->kw=NULL;c->argc=0;c->cap=0;}\n"
-"static NvVal nv_arg(NvVal*args,int argc,NvDict*kw,int pos,const char*name){if(pos<argc)return args[pos];int i=nv_dict_find(kw,name);if(i>=0)return kw->vals[i];char buf[512];snprintf(buf,sizeof(buf),\"Argument manquant : %s\",name);nv_throw(buf);return nv_none();}\n"
-"static void nv_expect_type(NvVal v,const char*t,const char*name){int ok=0;if(strcmp(t,\"int\")==0)ok=v.kind==NV_INT;else if(strcmp(t,\"float\")==0)ok=v.kind==NV_FLOAT||v.kind==NV_INT;else if(strcmp(t,\"str\")==0)ok=v.kind==NV_STR;else if(strcmp(t,\"bool\")==0)ok=v.kind==NV_BOOL;else if(strcmp(t,\"list\")==0)ok=v.kind==NV_LIST;else if(strcmp(t,\"dict\")==0)ok=v.kind==NV_DICT;else if(strcmp(t,\"object\")==0)ok=v.kind==NV_OBJ;else if(strcmp(t,\"file\")==0)ok=v.kind==NV_FILE;else ok=1;if(!ok){char buf[512];snprintf(buf,sizeof(buf),\"Type incorrect pour %s : %s attendu\",name,t);nv_throw(buf);}}\n"
+"static NvVal nv_arg(NvVal*args,int argc,NvDict*kw,int pos,const char*name){if(pos<argc)return args[pos];int i=nv_dict_find(kw,name);if(i>=0)return kw->vals[i];char buf[512];snprintf(buf,sizeof(buf),\"Missing argument: %s\",name);nv_throw(buf);return nv_none();}\n"
+"static void nv_expect_type(NvVal v,const char*t,const char*name){int ok=0;if(strcmp(t,\"int\")==0)ok=v.kind==NV_INT;else if(strcmp(t,\"float\")==0)ok=v.kind==NV_FLOAT||v.kind==NV_INT;else if(strcmp(t,\"str\")==0)ok=v.kind==NV_STR;else if(strcmp(t,\"bool\")==0)ok=v.kind==NV_BOOL;else if(strcmp(t,\"list\")==0)ok=v.kind==NV_LIST;else if(strcmp(t,\"dict\")==0)ok=v.kind==NV_DICT;else if(strcmp(t,\"object\")==0)ok=v.kind==NV_OBJ;else if(strcmp(t,\"file\")==0)ok=v.kind==NV_FILE;else ok=1;if(!ok){char buf[512];snprintf(buf,sizeof(buf),\"Invalid type for %s: expected %s\",name,t);nv_throw(buf);}}\n"
 "static NvVal nv_dispatch_call(const char*,NvVal*,int,NvDict*);\n"
 "static NvVal nv_dispatch_method(NvVal,const char*,NvVal*,int,NvDict*);\n"
 "\n";
@@ -903,17 +903,17 @@ static void parse_params(char *src, FuncMeta *fm) {
     if(!*p)return;
     char *save=NULL;
     for(char *tok=strtok_r(p,",",&save); tok; tok=strtok_r(NULL,",",&save)){
-        if(fm->param_count>=MAX_PARAMS)die("Trop de paramètres dans %s",fm->name);
+        if(fm->param_count>=MAX_PARAMS)die("Too many parameters in %s",fm->name);
         char *item=trim(tok); char *colon=strchr(item,':');
         ParamMeta *pm=&fm->params[fm->param_count++]; memset(pm,0,sizeof(*pm));
         if(colon){*colon='\0';snprintf(pm->name,sizeof(pm->name),"%s",trim(item));snprintf(pm->type,sizeof(pm->type),"%s",trim(colon+1));}
         else{snprintf(pm->name,sizeof(pm->name),"%s",item);pm->type[0]='\0';}
-        if(!is_ident(pm->name))die("Paramètre invalide : %s",pm->name);
+        if(!is_ident(pm->name))die("Invalid parameter: %s",pm->name);
     }
 }
 
 static FuncMeta *register_function(const char *name,const char *owner,char *params,const char *ret) {
-    if(func_count>=MAX_FUNCS)die("Trop de fonctions");
+    if(func_count>=MAX_FUNCS)die("Too many functions");
     FuncMeta *fm=&funcs[func_count++]; memset(fm,0,sizeof(*fm));
     snprintf(fm->name,sizeof(fm->name),"%s",name);
     if(owner&&*owner)snprintf(fm->owner,sizeof(fm->owner),"%s",owner);
@@ -967,7 +967,7 @@ static void emit_set_lvalue(FILE*out,int indent,const char*lhs,const char*rhs,in
     char tmp[MAX_LINE];snprintf(tmp,sizeof(tmp),"%s",lhs);char*l=trim(tmp);
     /* champ objet : obj.nom */
     char *dot=strrchr(l,'.');
-    if(dot){*dot='\0';char*obj=trim(l);char*field=trim(dot+1);if(!is_ident(field))die("Erreur ligne %d : champ invalide",lineno);char*objexpr=compile_expr(obj,lineno);char*value=NULL;if(augop){char*cur=fmtdup("nv_get_field(%s, \"%s\")",objexpr,field);char*rv=compile_expr(rhs,lineno);value=fmtdup("%s(%s,%s)",strcmp(augop,"+")==0?"nv_add":strcmp(augop,"-")==0?"nv_sub":strcmp(augop,"*")==0?"nv_mul":"nv_div",cur,rv);free(cur);free(rv);}else value=compile_expr(rhs,lineno);emit_indent(out,indent);fprintf(out,"nv_set_field(%s, \"%s\", %s);\n",objexpr,field,value);free(objexpr);free(value);return;}
+    if(dot){*dot='\0';char*obj=trim(l);char*field=trim(dot+1);if(!is_ident(field))die("Line %d: invalid field",lineno);char*objexpr=compile_expr(obj,lineno);char*value=NULL;if(augop){char*cur=fmtdup("nv_get_field(%s, \"%s\")",objexpr,field);char*rv=compile_expr(rhs,lineno);value=fmtdup("%s(%s,%s)",strcmp(augop,"+")==0?"nv_add":strcmp(augop,"-")==0?"nv_sub":strcmp(augop,"*")==0?"nv_mul":"nv_div",cur,rv);free(cur);free(rv);}else value=compile_expr(rhs,lineno);emit_indent(out,indent);fprintf(out,"nv_set_field(%s, \"%s\", %s);\n",objexpr,field,value);free(objexpr);free(value);return;}
     /* index : a[expr] */
     size_t n=strlen(l); if(n>2 && l[n-1]==']'){
         int depth=0;int open=-1;for(int i=(int)n-1;i>=0;i--){if(l[i]==']')depth++;else if(l[i]=='['){depth--;if(depth==0){open=i;break;}}}
@@ -975,12 +975,12 @@ static void emit_set_lvalue(FILE*out,int indent,const char*lhs,const char*rhs,in
     }
     /* variable simple, éventuellement typée */
     char name[MAX_NAME];snprintf(name,sizeof(name),"%s",l);char typebuf[MAX_NAME]={0};char*colon=strchr(name,':');if(colon){*colon='\0';snprintf(typebuf,sizeof(typebuf),"%s",trim(colon+1));}
-    char*vn=trim(name);if(!is_ident(vn))die("Erreur ligne %d : variable invalide '%s'",lineno,vn);
+    char*vn=trim(name);if(!is_ident(vn))die("Line %d: invalid variable '%s'",lineno,vn);
     const char*type = annot_type&&*annot_type?annot_type:(typebuf[0]?typebuf:NULL);
     VarScope *consts = (scope == &func_scope) ? &func_consts : &main_consts;
-    if (scope_has(consts, vn)) die("Erreur ligne %d : '%s' est fixe et ne peut pas être modifié", lineno, vn);
+    if (scope_has(consts, vn)) die("Line %d: '%s' is const and cannot be modified", lineno, vn);
     char*val=NULL;
-    if(augop){if(!scope_has(scope,vn))die("Erreur ligne %d : variable inconnue '%s'",lineno,vn);char*rv=compile_expr(rhs,lineno);val=fmtdup("%s(%s,%s)",strcmp(augop,"+")==0?"nv_add":strcmp(augop,"-")==0?"nv_sub":strcmp(augop,"*")==0?"nv_mul":"nv_div",vn,rv);free(rv);}else val=compile_expr(rhs,lineno);
+    if(augop){if(!scope_has(scope,vn))die("Line %d: unknown variable '%s'",lineno,vn);char*rv=compile_expr(rhs,lineno);val=fmtdup("%s(%s,%s)",strcmp(augop,"+")==0?"nv_add":strcmp(augop,"-")==0?"nv_sub":strcmp(augop,"*")==0?"nv_mul":"nv_div",vn,rv);free(rv);}else val=compile_expr(rhs,lineno);
     emit_indent(out,indent);
     if(!scope_has(scope,vn)){fprintf(out,"NvVal %s = %s;\n",vn,val);scope_add(scope,vn);}else fprintf(out,"%s = %s;\n",vn,val);
     if(type){emit_indent(out,indent);fprintf(out,"nv_expect_type(%s, \"%s\", \"%s\");\n",vn,type,vn);}free(val);
@@ -995,17 +995,17 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"static NvVal nv_dispatch_call(const char *name,NvVal *args,int argc,NvDict *kw){\n");
     fprintf(out,"    if(strcmp(name,\"print\")==0) return nv_builtin_print(args,argc);\n");
     fprintf(out,"    if(strcmp(name,\"input\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[4096]; if(!fgets(b,sizeof(b),stdin))return nv_str(\"\"); b[strcspn(b,\"\\r\\n\")]=0; return nv_str(b); }\n");
-    fprintf(out,"    if(strcmp(name,\"input_int\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_int(0); char *e=NULL; long long v=strtoll(b,&e,10); if(e==b)nv_throw(\"Un entier était attendu\"); return nv_int(v); }\n");
-    fprintf(out,"    if(strcmp(name,\"input_float\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_float(0); char *e=NULL; double v=strtod(b,&e); if(e==b)nv_throw(\"Un nombre décimal était attendu\"); return nv_float(v); }\n");
-    fprintf(out,"    if(strcmp(name,\"int\")==0){ if(argc<1)nv_throw(\"int() attend une valeur\"); if(args[0].kind==NV_INT)return args[0]; if(args[0].kind==NV_STR)return nv_int(strtoll(args[0].as.s,NULL,10)); return nv_int((long long)nv_num(args[0])); }\n");
-    fprintf(out,"    if(strcmp(name,\"float\")==0){ if(argc<1)nv_throw(\"float() attend une valeur\"); if(args[0].kind==NV_STR)return nv_float(strtod(args[0].as.s,NULL)); return nv_float(nv_num(args[0])); }\n");
-    fprintf(out,"    if(strcmp(name,\"str\")==0){ if(argc<1)nv_throw(\"str() attend une valeur\"); return nv_to_str(args[0]); }\n");
-    fprintf(out,"    if(strcmp(name,\"open\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"open() attend un chemin texte\"); const char*m=\"r\"; if(argc>1&&args[1].kind==NV_STR){ if(strcmp(args[1].as.s,\"read\")==0)m=\"r\"; else if(strcmp(args[1].as.s,\"write\")==0)m=\"w\"; else if(strcmp(args[1].as.s,\"append\")==0)m=\"a\"; else m=args[1].as.s;} FILE*f=fopen(args[0].as.s,m); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); return nv_file_value(f); }\n");
-    fprintf(out,"    if(strcmp(name,\"read_file\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"read_file() attend un chemin texte\"); FILE*f=fopen(args[0].as.s,\"r\"); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); NvVal fv=nv_file_value(f); NvVal r=nv_file_read(fv); fclose(f); return r; }\n");
-    fprintf(out,"    if(strcmp(name,\"write_file\")==0){ if(argc<2||args[0].kind!=NV_STR)nv_throw(\"write_file() attend un chemin et une valeur\"); FILE*f=fopen(args[0].as.s,\"w\"); if(!f)nv_throwf(\"Impossible d'ouvrir le fichier : %%s\",args[0].as.s); NvVal fv=nv_file_value(f); nv_file_write(fv,args[1]); fclose(f); return nv_none(); }\n");
-    fprintf(out,"    if(strcmp(name,\"len\")==0){ if(argc<1)nv_throw(\"len() attend une valeur\"); return nv_int(nv_len(args[0])); }\n");
-    fprintf(out,"    if(strcmp(name,\"range\")==0){ long long a=0,b=0,p=1; if(argc==1){b=(long long)nv_num(args[0]);} else if(argc>=2){a=(long long)nv_num(args[0]);b=(long long)nv_num(args[1]);if(argc>=3)p=(long long)nv_num(args[2]);} else nv_throw(\"range() attend 1 à 3 arguments\"); if(p==0)nv_throw(\"Le pas de range ne peut pas être zéro\"); NvVal l=nv_list_new(); if(p>0){for(long long i=a;i<b;i+=p)nv_list_append(l,nv_int(i));}else{for(long long i=a;i>b;i+=p)nv_list_append(l,nv_int(i));} return l;}\n");
-    fprintf(out,"    if(strcmp(name,\"error\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"error() attend un texte\"); nv_throw(args[0].as.s); }\n");
+    fprintf(out,"    if(strcmp(name,\"input_int\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_int(0); char *e=NULL; long long v=strtoll(b,&e,10); if(e==b)nv_throw(\"Expected an integer\"); return nv_int(v); }\n");
+    fprintf(out,"    if(strcmp(name,\"input_float\")==0){ if(argc>0){nv_print_one(args[0]);fflush(stdout);} char b[256]; if(!fgets(b,sizeof(b),stdin))return nv_float(0); char *e=NULL; double v=strtod(b,&e); if(e==b)nv_throw(\"Expected a floating-point number\"); return nv_float(v); }\n");
+    fprintf(out,"    if(strcmp(name,\"int\")==0){ if(argc<1)nv_throw(\"int() expects a value\"); if(args[0].kind==NV_INT)return args[0]; if(args[0].kind==NV_STR)return nv_int(strtoll(args[0].as.s,NULL,10)); return nv_int((long long)nv_num(args[0])); }\n");
+    fprintf(out,"    if(strcmp(name,\"float\")==0){ if(argc<1)nv_throw(\"float() expects a value\"); if(args[0].kind==NV_STR)return nv_float(strtod(args[0].as.s,NULL)); return nv_float(nv_num(args[0])); }\n");
+    fprintf(out,"    if(strcmp(name,\"str\")==0){ if(argc<1)nv_throw(\"str() expects a value\"); return nv_to_str(args[0]); }\n");
+    fprintf(out,"    if(strcmp(name,\"open\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"open() expects a string path\"); const char*m=\"r\"; if(argc>1&&args[1].kind==NV_STR){ if(strcmp(args[1].as.s,\"read\")==0)m=\"r\"; else if(strcmp(args[1].as.s,\"write\")==0)m=\"w\"; else if(strcmp(args[1].as.s,\"append\")==0)m=\"a\"; else m=args[1].as.s;} FILE*f=fopen(args[0].as.s,m); if(!f)nv_throwf(\"Unable to open file: %%s\",args[0].as.s); return nv_file_value(f); }\n");
+    fprintf(out,"    if(strcmp(name,\"read_file\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"read_file() expects a string path\"); FILE*f=fopen(args[0].as.s,\"r\"); if(!f)nv_throwf(\"Unable to open file: %%s\",args[0].as.s); NvVal fv=nv_file_value(f); NvVal r=nv_file_read(fv); fclose(f); return r; }\n");
+    fprintf(out,"    if(strcmp(name,\"write_file\")==0){ if(argc<2||args[0].kind!=NV_STR)nv_throw(\"write_file() expects a path and a value\"); FILE*f=fopen(args[0].as.s,\"w\"); if(!f)nv_throwf(\"Unable to open file: %%s\",args[0].as.s); NvVal fv=nv_file_value(f); nv_file_write(fv,args[1]); fclose(f); return nv_none(); }\n");
+    fprintf(out,"    if(strcmp(name,\"len\")==0){ if(argc<1)nv_throw(\"len() expects a value\"); return nv_int(nv_len(args[0])); }\n");
+    fprintf(out,"    if(strcmp(name,\"range\")==0){ long long a=0,b=0,p=1; if(argc==1){b=(long long)nv_num(args[0]);} else if(argc>=2){a=(long long)nv_num(args[0]);b=(long long)nv_num(args[1]);if(argc>=3)p=(long long)nv_num(args[2]);} else nv_throw(\"range() expects 1 to 3 arguments\"); if(p==0)nv_throw(\"range() step cannot be zero\"); NvVal l=nv_list_new(); if(p>0){for(long long i=a;i<b;i+=p)nv_list_append(l,nv_int(i));}else{for(long long i=a;i>b;i+=p)nv_list_append(l,nv_int(i));} return l;}\n");
+    fprintf(out,"    if(strcmp(name,\"error\")==0){ if(argc<1||args[0].kind!=NV_STR)nv_throw(\"error() expects a string\"); nv_throw(args[0].as.s); }\n");
     for(int i=0;i<func_count;i++) if(funcs[i].owner[0]=='\0') fprintf(out,"    if(strcmp(name,\"%s\")==0) return %s(args,argc,kw);\n",funcs[i].name,funcs[i].internal);
     for(int i=0;i<type_count;i++){
         TypeMeta*t=&types[i];
@@ -1028,11 +1028,11 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"    nv_throwf(\"Fonction inconnue : %%s\",name); return nv_none();\n}\n");
 
     fprintf(out,"static NvVal nv_dispatch_method(NvVal self,const char *name,NvVal *args,int argc,NvDict *kw){\n");
-    fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"append\")==0){ if(argc<1)nv_throw(\"append() attend une valeur\"); nv_list_append(self,args[0]); return nv_none(); }\n");
-    fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"retire\")==0){ if(argc<1)nv_throw(\"retire() attend une valeur\"); for(int i=0;i<self.as.list->len;i++){if(nv_same(self.as.list->items[i],args[0])){for(int j=i;j<self.as.list->len-1;j++)self.as.list->items[j]=self.as.list->items[j+1];self.as.list->len--;return nv_none();}} return nv_none(); }\n");
+    fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"append\")==0){ if(argc<1)nv_throw(\"append() expects a value\"); nv_list_append(self,args[0]); return nv_none(); }\n");
+    fprintf(out,"    if(self.kind==NV_LIST && strcmp(name,\"remove\")==0){ if(argc<1)nv_throw(\"remove() expects a value\"); for(int i=0;i<self.as.list->len;i++){if(nv_same(self.as.list->items[i],args[0])){for(int j=i;j<self.as.list->len-1;j++)self.as.list->items[j]=self.as.list->items[j+1];self.as.list->len--;return nv_none();}} return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_DICT && strcmp(name,\"cles\")==0){ NvVal l=nv_list_new(); for(int i=0;i<self.as.dict->len;i++)nv_list_append(l,nv_str(self.as.dict->keys[i])); return l; }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"read\")==0) return nv_file_read(self);\n");
-    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"write\")==0){ if(argc<1)nv_throw(\"file.write() attend une valeur\"); return nv_file_write(self,args[0]); }\n");
+    fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"write\")==0){ if(argc<1)nv_throw(\"file.write() expects a value\"); return nv_file_write(self,args[0]); }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"close\")==0){ nv_file_close(self); return nv_none(); }\n");
     fprintf(out,"    if(self.kind==NV_OBJ){\n");
     for(int i=0;i<func_count;i++) if(funcs[i].owner[0]){
@@ -1047,16 +1047,16 @@ static void emit_dispatch(FILE*out){
 
 static void compile_source(FILE*in,const char*cfile){
     char main_tmp[512],func_tmp[512];snprintf(main_tmp,sizeof(main_tmp),"%s.main.tmp",cfile);snprintf(func_tmp,sizeof(func_tmp),"%s.func.tmp",cfile);
-    main_out=fopen(main_tmp,"w+");func_out=fopen(func_tmp,"w+");if(!main_out||!func_out)die("Impossible de créer les fichiers temporaires");
+    main_out=fopen(main_tmp,"w+");func_out=fopen(func_tmp,"w+");if(!main_out||!func_out)die("Unable to create temporary files");
     main_scope.count=0;func_scope.count=0;main_consts.count=0;func_consts.count=0;block_count=0;
 
     char line[MAX_LINE];int lineno=0;
     while(fgets(line,sizeof(line),in)){
         lineno++;
-        if(strchr(line,'\t'))die("Erreur ligne %d : utilise des espaces, pas des tabulations",lineno);
+        if(strchr(line,'\t'))die("Line %d: use spaces, not tabs",lineno);
         strip_comment(line);
         int indent=0;while(line[indent]==' ')indent++;
-        if(indent%4!=0)die("Erreur ligne %d : l'indentation doit utiliser des groupes de 4 espaces",lineno);
+        if(indent%4!=0)die("Line %d: indentation must use groups of 4 spaces",lineno);
         char*s=trim(line+indent);if(!*s)continue;
 
         /* Les listes, tables et appels peuvent s'étendre sur plusieurs lignes. */
@@ -1067,16 +1067,16 @@ static void compile_source(FILE*in,const char*cfile){
         while (balance > 0) {
             char extra[MAX_LINE];
             if (!fgets(extra, sizeof(extra), in))
-                die("Erreur ligne %d : parenthèse, crochet ou accolade non fermé", start_lineno);
+                die("Line %d: unclosed parenthesis, bracket, or brace", start_lineno);
             lineno++;
             if (strchr(extra, '\t'))
-                die("Erreur ligne %d : utilise des espaces, pas des tabulations", lineno);
+                die("Line %d: use spaces, not tabs", lineno);
             strip_comment(extra);
             char *part = trim(extra);
             if (!*part) continue;
             size_t have = strlen(logical), need = strlen(part);
             if (have + need + 2 >= sizeof(logical))
-                die("Erreur ligne %d : expression multiligne trop longue", start_lineno);
+                die("Line %d: multiline expression is too long", start_lineno);
             logical[have] = ' ';
             memcpy(logical + have + 1, part, need + 1);
             balance += bracket_balance(part);
@@ -1093,8 +1093,8 @@ static void compile_source(FILE*in,const char*cfile){
         if(strncmp(s,"case ",5)==0){
             if(top_block() && top_block()->kind==BLK_CASE && top_block()->indent==indent) close_one_block();
             Block *mb=NULL; for(int bi=block_count-1;bi>=0;bi--){if(blocks[bi].kind==BLK_MATCH && blocks[bi].indent==indent-4){mb=&blocks[bi];break;}}
-            if(!mb)die("Erreur ligne %d : 'case' doit être placé dans un bloc match",lineno);
-            size_t sn=strlen(s); if(s[sn-1]!=':')die("Erreur ligne %d : ':' attendu après casee",lineno);
+            if(!mb)die("Line %d: 'case' must be inside a match block",lineno);
+            size_t sn=strlen(s); if(s[sn-1]!=':')die("Line %d: expected ':' after case",lineno);
             char ce[MAX_LINE]; snprintf(ce,sizeof(ce),"%.*s",(int)sn-6,s+5); char *cv=compile_expr(trim(ce),lineno);
             FILE *mo=out_for_kind(mb->out_kind); emit_indent(mo,indent);
             fprintf(mo,mb->case_count?"else if (nv_truth(nv_eq(__match%d, %s))) {\n":"if (nv_truth(nv_eq(__match%d, %s))) {\n",mb->try_id,cv);
@@ -1102,7 +1102,7 @@ static void compile_source(FILE*in,const char*cfile){
         }
         if(strcmp(s,"else:")==0 && top_block() && top_block()->kind==BLK_CASE && top_block()->indent==indent){
             close_one_block(); Block *mb=NULL; for(int bi=block_count-1;bi>=0;bi--){if(blocks[bi].kind==BLK_MATCH && blocks[bi].indent==indent-4){mb=&blocks[bi];break;}}
-            if(!mb)die("Erreur ligne %d : else de match sans bloc match",lineno);
+            if(!mb)die("Line %d: match else without a match block",lineno);
             FILE *mo=out_for_kind(mb->out_kind); emit_indent(mo,indent); fprintf(mo,"else {\n"); mb->case_count++; push_block(BLK_CASE,indent,mb->out_kind,NULL,0); continue;
         }
 
@@ -1120,47 +1120,47 @@ static void compile_source(FILE*in,const char*cfile){
         while(top_block() && top_block()->indent==indent) close_one_block();
 
         /* Définition de structure / objet */
-        if(indent==0 && strncmp(s,"struct ",7)==0){char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+7));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';if(!is_ident(trim(name)))die("Erreur ligne %d : nom de struct invalide",lineno);register_type(trim(name),TYPE_STRUCTURE);push_block(BLK_STRUCTURE,0,OUT_NONE,trim(name),0);continue;}
-        if(indent==0 && strncmp(s,"object ",7)==0){char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+7));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';if(!is_ident(trim(name)))die("Erreur ligne %d : nom d'object invalide",lineno);register_type(trim(name),TYPE_OBJECT);push_block(BLK_OBJECT,0,OUT_NONE,trim(name),0);continue;}
+        if(indent==0 && strncmp(s,"struct ",7)==0){char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+7));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';if(!is_ident(trim(name)))die("Line %d: invalid struct name",lineno);register_type(trim(name),TYPE_STRUCTURE);push_block(BLK_STRUCTURE,0,OUT_NONE,trim(name),0);continue;}
+        if(indent==0 && strncmp(s,"object ",7)==0){char name[MAX_NAME];snprintf(name,sizeof(name),"%s",trim(s+7));size_t n=strlen(name);if(n&&name[n-1]==':')name[n-1]='\0';if(!is_ident(trim(name)))die("Line %d: invalid object name",lineno);register_type(trim(name),TYPE_OBJECT);push_block(BLK_OBJECT,0,OUT_NONE,trim(name),0);continue;}
 
         /* Champ dans structure/objet */
         TypeMeta*ct=current_type_meta();
-        if(ct && indent==4 && strncmp(s,"fn ",3)!=0){char buf[MAX_LINE];snprintf(buf,sizeof(buf),"%s",s);char*colon=strchr(buf,':');if(colon && !strchr(buf,'=')){*colon='\0';char*name=trim(buf);char*type=trim(colon+1);if(!is_ident(name))die("Erreur ligne %d : champ invalide",lineno);if(ct->field_count>=MAX_FIELDS)die("Trop de champs");FieldMeta*f=&ct->fields[ct->field_count++];snprintf(f->name,sizeof(f->name),"%s",name);snprintf(f->type,sizeof(f->type),"%s",type);continue;}}
+        if(ct && indent==4 && strncmp(s,"fn ",3)!=0){char buf[MAX_LINE];snprintf(buf,sizeof(buf),"%s",s);char*colon=strchr(buf,':');if(colon && !strchr(buf,'=')){*colon='\0';char*name=trim(buf);char*type=trim(colon+1);if(!is_ident(name))die("Line %d: invalid field",lineno);if(ct->field_count>=MAX_FIELDS)die("Too many fields");FieldMeta*f=&ct->fields[ct->field_count++];snprintf(f->name,sizeof(f->name),"%s",name);snprintf(f->type,sizeof(f->type),"%s",type);continue;}}
 
         /* Fonction globale ou méthode */
         if(strncmp(s,"fn ",3)==0){
-            char hdr[MAX_LINE];snprintf(hdr,sizeof(hdr),"%s",s+3);char*lpar=strchr(hdr,'(');char*rpar=strrchr(hdr,')');if(!lpar||!rpar||rpar<lpar)die("Erreur ligne %d : définition de fonction invalide",lineno);*lpar='\0';char*name=trim(hdr);*rpar='\0';char*params=lpar+1;char ret[MAX_NAME]="auto";char*after=trim(rpar+1);if(strncmp(after,"->",2)==0){after=trim(after+2);char*col=strrchr(after,':');if(col)*col='\0';snprintf(ret,sizeof(ret),"%s",trim(after));}
-            const char*owner=current_owner();if(owner&&find_type(owner)->kind==TYPE_STRUCTURE)die("Erreur ligne %d : une structure ne contient pas de méthode",lineno);
+            char hdr[MAX_LINE];snprintf(hdr,sizeof(hdr),"%s",s+3);char*lpar=strchr(hdr,'(');char*rpar=strrchr(hdr,')');if(!lpar||!rpar||rpar<lpar)die("Line %d: invalid function definition",lineno);*lpar='\0';char*name=trim(hdr);*rpar='\0';char*params=lpar+1;char ret[MAX_NAME]="auto";char*after=trim(rpar+1);if(strncmp(after,"->",2)==0){after=trim(after+2);char*col=strrchr(after,':');if(col)*col='\0';snprintf(ret,sizeof(ret),"%s",trim(after));}
+            const char*owner=current_owner();if(owner&&find_type(owner)->kind==TYPE_STRUCTURE)die("Line %d: a struct cannot contain methods",lineno);
             FuncMeta*fm=register_function(name,owner,params,ret);emit_function_header(fm,indent);push_block(BLK_FUNC,indent,OUT_FUNC,owner,0);continue;
         }
 
-        OutKind ok=current_output();FILE*out=out_for_kind(ok);if(!out)die("Erreur ligne %d : instruction invalide ici",lineno);VarScope*scope=(ok==OUT_FUNC)?&func_scope:&main_scope;
+        OutKind ok=current_output();FILE*out=out_for_kind(ok);if(!out)die("Line %d: invalid statement here",lineno);VarScope*scope=(ok==OUT_FUNC)?&func_scope:&main_scope;
         VarScope*consts=(ok==OUT_FUNC)?&func_consts:&main_consts;
 
         /* valeur fixe */
         if(strncmp(s,"const ",6)==0){
             char rest[MAX_LINE]; snprintf(rest,sizeof(rest),"%s",trim(s+6)); int ol=0; int ap=find_top_level_assignment(rest,&ol);
-            if(ap<0||ol!=1)die("Erreur ligne %d : utilise 'const nom = valeur'",lineno);
+            if(ap<0||ol!=1)die("Line %d: use 'const name = value'",lineno);
             char lhs[MAX_LINE],rhs[MAX_LINE]; snprintf(lhs,sizeof(lhs),"%.*s",ap,rest); snprintf(rhs,sizeof(rhs),"%s",rest+ap+1);
             char nbuf[MAX_NAME]; snprintf(nbuf,sizeof(nbuf),"%s",trim(lhs)); char *col=strchr(nbuf,':'); if(col)*col='\0'; char *vn=trim(nbuf);
-            if(!is_ident(vn))die("Erreur ligne %d : nom const invalide",lineno);
+            if(!is_ident(vn))die("Line %d: invalid const name",lineno);
             emit_set_lvalue(out,indent,trim(lhs),trim(rhs),lineno,scope,NULL,NULL); scope_add(consts,vn); continue;
         }
 
         /* selon / cas */
         if(strncmp(s,"match ",6)==0){
-            size_t n=strlen(s); if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après match",lineno);
+            size_t n=strlen(s); if(s[n-1]!=':')die("Line %d: expected ':' after match",lineno);
             char ex[MAX_LINE]; snprintf(ex,sizeof(ex),"%.*s",(int)n-7,s+6); char *e=compile_expr(trim(ex),lineno); int id=++try_counter;
             emit_indent(out,indent); fprintf(out,"{ NvVal __match%d = %s;\n",id,e); free(e); push_block(BLK_MATCH,indent,ok,NULL,id); continue;
         }
 
         /* avec ferme automatiquement un fichier à la fin normale du bloc */
         if(strncmp(s,"with ",5)==0){
-            size_t n=strlen(s); if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après with",lineno);
+            size_t n=strlen(s); if(s[n-1]!=':')die("Line %d: expected ':' after with",lineno);
             char body[MAX_LINE]; snprintf(body,sizeof(body),"%.*s",(int)n-6,s+5); int ol=0; int ap=find_top_level_assignment(body,&ol);
-            if(ap<0||ol!=1)die("Erreur ligne %d : utilise 'with fichier = ouvre(...):'",lineno);
+            if(ap<0||ol!=1)die("Line %d: use 'with file = open(...):'",lineno);
             char lhs[MAX_NAME],rhs[MAX_LINE]; snprintf(lhs,sizeof(lhs),"%.*s",ap,body); snprintf(rhs,sizeof(rhs),"%s",body+ap+1); char *vn=trim(lhs);
-            if(!is_ident(vn))die("Erreur ligne %d : nom de fichier invalide",lineno); char *e=compile_expr(trim(rhs),lineno);
+            if(!is_ident(vn))die("Line %d: invalid file variable name",lineno); char *e=compile_expr(trim(rhs),lineno);
             emit_indent(out,indent); fprintf(out,"{ NvVal %s = %s;\n",vn,e); free(e); push_block(BLK_WITH,indent,ok,vn,0); continue;
         }
 
@@ -1168,7 +1168,7 @@ static void compile_source(FILE*in,const char*cfile){
         /* contrôle de boucle */
         if(strcmp(s,"break")==0 || strcmp(s,"continue")==0){
             int loop=0; for(int bi=block_count-1;bi>=0;bi--){if(blocks[bi].kind==BLK_FOR||blocks[bi].kind==BLK_WHILE){loop=1;break;}}
-            if(!loop)die("Erreur ligne %d : '%s' doit être utilisé dans une boucle",lineno,s);
+            if(!loop)die("Line %d: '%s' must be used inside a loop",lineno,s);
             emit_indent(out,indent); fprintf(out,strcmp(s,"break")==0?"break;\n":"continue;\n"); continue;
         }
 
@@ -1176,15 +1176,15 @@ static void compile_source(FILE*in,const char*cfile){
         if(strncmp(s,"return",6)==0 && (s[6]=='\0'||isspace((unsigned char)s[6]))){char*rest=trim(s+7);emit_indent(out,indent);if(*rest){char*e=compile_expr(rest,lineno);fprintf(out,"return %s;\n",e);free(e);}else fprintf(out,"return nv_none();\n");continue;}
 
         /* si / sinonsi / sinon */
-        if(strncmp(s,"if ",3)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après if",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-4,s+3);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
-        if(strncmp(s,"elif ",5)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après elif",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-6,s+5);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"else if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
+        if(strncmp(s,"if ",3)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Line %d: expected ':' after if",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-4,s+3);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
+        if(strncmp(s,"elif ",5)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Line %d: expected ':' after elif",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-6,s+5);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"else if (nv_truth(%s)) {\n",e);free(e);push_block(BLK_IF,indent,ok,NULL,0);continue;}
         if(strcmp(s,"else:")==0){emit_indent(out,indent);fprintf(out,"else {\n");push_block(BLK_IF,indent,ok,NULL,0);continue;}
 
         /* tantque */
-        if(strncmp(s,"while ",6)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après while",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-7,s+6);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"while (nv_truth(%s)) {\n",e);free(e);push_block(BLK_WHILE,indent,ok,NULL,0);continue;}
+        if(strncmp(s,"while ",6)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Line %d: expected ':' after while",lineno);char cond[MAX_LINE];snprintf(cond,sizeof(cond),"%.*s",(int)n-7,s+6);char*e=compile_expr(trim(cond),lineno);emit_indent(out,indent);fprintf(out,"while (nv_truth(%s)) {\n",e);free(e);push_block(BLK_WHILE,indent,ok,NULL,0);continue;}
 
         /* pour x dans expr */
-        if(strncmp(s,"for ",4)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Erreur ligne %d : ':' attendu après for",lineno);char tmp[MAX_LINE];snprintf(tmp,sizeof(tmp),"%.*s",(int)n-5,s+4);char*din=strstr(tmp," in ");if(!din)die("Erreur ligne %d : 'in' attendu",lineno);*din='\0';char*vn=trim(tmp);char*iter=trim(din+4);if(!is_ident(vn))die("Erreur ligne %d : variable de boucle invalide",lineno);char*ie=compile_expr(iter,lineno);int id=lineno;emit_indent(out,indent);fprintf(out,"{ NvVal __iter%d = %s; for (int __i%d=0; __i%d<nv_len(__iter%d); __i%d++) {\n",id,ie,id,id,id,id);free(ie);emit_indent(out,indent+4);if(!scope_has(scope,vn)){fprintf(out,"NvVal %s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);scope_add(scope,vn);}else fprintf(out,"%s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);push_block(BLK_FOR,indent,ok,NULL,0);continue;}
+        if(strncmp(s,"for ",4)==0){size_t n=strlen(s);if(s[n-1]!=':')die("Line %d: expected ':' after for",lineno);char tmp[MAX_LINE];snprintf(tmp,sizeof(tmp),"%.*s",(int)n-5,s+4);char*din=strstr(tmp," in ");if(!din)die("Line %d: expected 'in'",lineno);*din='\0';char*vn=trim(tmp);char*iter=trim(din+4);if(!is_ident(vn))die("Line %d: invalid loop variable",lineno);char*ie=compile_expr(iter,lineno);int id=lineno;emit_indent(out,indent);fprintf(out,"{ NvVal __iter%d = %s; for (int __i%d=0; __i%d<nv_len(__iter%d); __i%d++) {\n",id,ie,id,id,id,id);free(ie);emit_indent(out,indent+4);if(!scope_has(scope,vn)){fprintf(out,"NvVal %s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);scope_add(scope,vn);}else fprintf(out,"%s = nv_iter_get(__iter%d,__i%d);\n",vn,id,id);push_block(BLK_FOR,indent,ok,NULL,0);continue;}
 
         /* tente */
         if(strcmp(s,"try:")==0){int id=++try_counter;emit_indent(out,indent);fprintf(out,"NvTryFrame __try%d; __try%d.prev=nv_try_top; nv_try_top=&__try%d; if (setjmp(__try%d.env)==0) {\n",id,id,id,id);push_block(BLK_TRY,indent,ok,NULL,id);continue;}
@@ -1202,9 +1202,9 @@ static void compile_source(FILE*in,const char*cfile){
     /* Le runtime est séparé pour garder le C généré lisible. */
     char runtimefile[512]; snprintf(runtimefile,sizeof(runtimefile),"%s",cfile); char *slash=strrchr(runtimefile,'/');
     if(slash) snprintf(slash+1,(size_t)(runtimefile+sizeof(runtimefile)-(slash+1)),"clariox_runtime.h"); else snprintf(runtimefile,sizeof(runtimefile),"clariox_runtime.h");
-    FILE*rt=fopen(runtimefile,"w"); if(!rt)die("Impossible de créer %s",runtimefile);
+    FILE*rt=fopen(runtimefile,"w"); if(!rt)die("Unable to create %s",runtimefile);
     fputs("#ifndef CLARIOX_RUNTIME_H\n#define CLARIOX_RUNTIME_H\n",rt); fputs(RUNTIME_C,rt); fputs("\n#endif\n",rt); fclose(rt);
-    FILE*out=fopen(cfile,"w");if(!out)die("Impossible de créer %s",cfile);fputs("#include \"clariox_runtime.h\"\n",out);
+    FILE*out=fopen(cfile,"w");if(!out)die("Unable to create %s",cfile);fputs("#include \"clariox_runtime.h\"\n",out);
     int ch;while((ch=fgetc(func_out))!=EOF)fputc(ch,out);
     emit_dispatch(out);
     fprintf(out,"\nint main(void){\n");while((ch=fgetc(main_out))!=EOF)fputc(ch,out);fprintf(out,"    return 0;\n}\n");
@@ -1213,12 +1213,12 @@ static void compile_source(FILE*in,const char*cfile){
 
 int main(int argc,char**argv){
     if(argc!=3){fprintf(stderr,"Usage : %s programme.clx sortie\n",argv[0]);return 1;}
-    if(!safe_filename(argv[1])||!safe_filename(argv[2])){fprintf(stderr,"Nom de fichier non autorisé\n");return 1;}
+    if(!safe_filename(argv[1])||!safe_filename(argv[2])){fprintf(stderr,"Filename not allowed\n");return 1;}
     FILE*in=fopen(argv[1],"r");if(!in){perror("source");return 1;}
     char cfile[512];snprintf(cfile,sizeof(cfile),"%s.c",argv[2]);
     compile_source(in,cfile);fclose(in);
     char cmd[1400];snprintf(cmd,sizeof(cmd),"clang -std=gnu11 -O3 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter '%s' -lm -o '%s'",cfile,argv[2]);
     printf("[Clariox] C généré : %s\n",cfile);printf("[Clariox] Runtime séparé : clariox_runtime.h\n");printf("[Clariox] Compilation native avec Clang -O3...\n");
-    int rc=system(cmd);if(rc!=0){fprintf(stderr,"Échec de Clang. Le fichier C généré a été conservé pour diagnostic.\n");return 1;}
-    printf("[Clariox] Exécutable créé : %s\n",argv[2]);return 0;
+    int rc=system(cmd);if(rc!=0){fprintf(stderr,"Clang compilation failed. Generated C file kept for diagnostics.\n");return 1;}
+    printf("[Clariox] Executable created: %s\n",argv[2]);return 0;
 }

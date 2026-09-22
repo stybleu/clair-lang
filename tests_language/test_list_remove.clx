@@ -1,0 +1,5 @@
+values = [10, 20, 30]
+values.remove(20)
+
+print("Values:", values)
+print("Length:", len(values))

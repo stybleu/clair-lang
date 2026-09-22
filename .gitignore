@@ -112,3 +112,8 @@ __pycache__/
 /test_*.c
 /test_*
 !/*.clx
+
+# Clariox language-test temporary files
+/clariox_api_test.txt
+/clariox_with_test.txt
+/clariox_test.txt
