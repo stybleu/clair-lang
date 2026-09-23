@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo/clariox-logo-dark.png" alt="Clariox logo" width="420">
+</p>
+
 # Clariox
 
 **Clariox** is an experimental compiled programming language focused on readable syntax, native execution, and safe compiler optimizations.
