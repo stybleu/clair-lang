@@ -1312,9 +1312,31 @@ def repair(lines):
     # dynamique de a.
     # --------------------------------------------------------
 
-    def eliminate_dead_float_reboxes(source_lines):
+    def optimize_float_reboxes(source_lines):
+        """
+        Optimise la matérialisation des NvVal float après
+        un while utilisant un temporaire double natif.
+
+        Deux cas sûrs sont traités :
+
+        1. La valeur NvVal est écrasée avant tout usage
+           dynamique :
+              -> supprimer complètement le réemballage.
+
+        2. Des lectures purement numériques ont lieu avant
+           un usage dynamique :
+              -> utiliser directement le double natif ;
+              -> retarder nv_float(...) jusqu'au premier
+                 usage dynamique.
+
+        Aucun déplacement n'est effectué à travers une
+        structure de contrôle.
+        """
+
         optimized = list(source_lines)
+
         eliminated = []
+        delayed = []
 
         rebox_pattern = re.compile(
             r'^\s*'
@@ -1328,8 +1350,10 @@ def repair(lines):
         index = 0
 
         while index < len(optimized):
+            rebox_line = optimized[index]
+
             match = rebox_pattern.match(
-                optimized[index]
+                rebox_line
             )
 
             if not match:
@@ -1339,12 +1363,14 @@ def repair(lines):
             original_name = match.group(1)
             native_name = match.group(2)
 
-            scan = index + 1
-
             replacements = []
             native_reads = 0
-            overwrite_found = False
-            safe = True
+
+            overwrite_index = None
+            dynamic_index = None
+            blocked = False
+
+            scan = index + 1
 
             while scan < len(optimized):
                 current = optimized[scan]
@@ -1354,7 +1380,7 @@ def repair(lines):
                     scan += 1
                     continue
 
-                # Ne jamais transporter le temporaire à travers
+                # Ne jamais déplacer un réemballage à travers
                 # une structure de contrôle.
                 if (
                     stripped == "}"
@@ -1364,11 +1390,13 @@ def repair(lines):
                     )
                     or stripped.startswith("return ")
                 ):
-                    safe = False
+                    blocked = True
                     break
 
-                # Nouvelle affectation de la NvVal originale :
-                # sa valeur précédente devient morte.
+                # ------------------------------------------------
+                # Réaffectation de la NvVal originale.
+                # ------------------------------------------------
+
                 overwrite = re.match(
                     rf'^(\s*)'
                     rf'{re.escape(original_name)}'
@@ -1379,20 +1407,30 @@ def repair(lines):
                 if overwrite:
                     rhs = overwrite.group(2)
 
-                    # a = expression utilisant encore a
-                    # nécessite l'ancien NvVal.
+                    # Si l'ancienne valeur est utilisée dans le
+                    # RHS, elle doit déjà être matérialisée.
                     if re.search(
-                        rf'\b{re.escape(original_name)}\b',
+                        rf'\b'
+                        rf'{re.escape(original_name)}'
+                        rf'\b',
                         rhs,
                     ):
-                        safe = False
-                        break
+                        dynamic_index = scan
+                    else:
+                        overwrite_index = scan
 
-                    overwrite_found = True
                     break
 
-                # Autoriser uniquement une lecture numérique
-                # dans une déclaration double.
+                # ------------------------------------------------
+                # Lecture native :
+                #
+                # double result = nv_num(a);
+                #
+                # devient :
+                #
+                # double result = __clariox_loop_float_...;
+                # ------------------------------------------------
+
                 declaration = re.match(
                     r'^(\s*)double\s+'
                     r'([A-Za-z_][A-Za-z0-9_]*)'
@@ -1424,8 +1462,9 @@ def repair(lines):
                             rhs,
                         )
 
-                        # Le nom apparaît, mais pas exclusivement
-                        # sous la forme nv_num(a).
+                        # Si le nom existe encore après
+                        # substitution, l'expression nécessite
+                        # réellement la NvVal.
                         if (
                             count == 0
                             or re.search(
@@ -1435,7 +1474,7 @@ def repair(lines):
                                 converted_rhs,
                             )
                         ):
-                            safe = False
+                            dynamic_index = scan
                             break
 
                         replacements.append(
@@ -1451,22 +1490,32 @@ def repair(lines):
                     scan += 1
                     continue
 
-                # Toute autre utilisation de a nécessite que le
-                # NvVal réemballé existe réellement.
+                # ------------------------------------------------
+                # Toute autre lecture de a est considérée comme
+                # dynamique.
+                # ------------------------------------------------
+
                 if re.search(
-                    rf'\b{re.escape(original_name)}\b',
+                    rf'\b'
+                    rf'{re.escape(original_name)}'
+                    rf'\b',
                     current,
                 ):
-                    safe = False
+                    dynamic_index = scan
                     break
 
-                # Instruction indépendante de a :
-                # elle peut rester telle quelle.
+                # Instruction indépendante de a.
                 scan += 1
 
+            # ----------------------------------------------------
+            # CAS 1 :
+            # a est écrasé avant tout usage dynamique.
+            # Le réemballage est complètement mort.
+            # ----------------------------------------------------
+
             if (
-                safe
-                and overwrite_found
+                not blocked
+                and overwrite_index is not None
                 and native_reads > 0
             ):
                 optimized[index] = ""
@@ -1477,16 +1526,53 @@ def repair(lines):
                 ) in replacements:
                     optimized[line_index] = replacement
 
-                eliminated.append(original_name)
+                eliminated.append(
+                    original_name
+                )
+
+            # ----------------------------------------------------
+            # CAS 2 :
+            # il existe des lectures natives avant un véritable
+            # usage dynamique.
+            #
+            # Déplacer nv_float(...) juste avant cet usage.
+            # ----------------------------------------------------
+
+            elif (
+                not blocked
+                and dynamic_index is not None
+                and native_reads > 0
+            ):
+                for (
+                    line_index,
+                    replacement,
+                ) in replacements:
+                    optimized[line_index] = replacement
+
+                optimized[index] = ""
+
+                optimized[dynamic_index] = (
+                    rebox_line
+                    + optimized[dynamic_index]
+                )
+
+                delayed.append(
+                    original_name
+                )
 
             index += 1
 
-        return optimized, eliminated
+        return (
+            optimized,
+            eliminated,
+            delayed,
+        )
 
     (
         numeric_output,
         flow_float_rebox_eliminated,
-    ) = eliminate_dead_float_reboxes(
+        flow_float_rebox_delayed,
+    ) = optimize_float_reboxes(
         numeric_output
     )
 
@@ -1499,6 +1585,16 @@ def repair(lines):
 
         for name in sorted(
             set(flow_float_rebox_eliminated)
+        ):
+            print(f"  {name}")
+
+    if flow_float_rebox_delayed:
+        print(
+            "[Clariox OPT] Réemballages float retardés :"
+        )
+
+        for name in sorted(
+            set(flow_float_rebox_delayed)
         ):
             print(f"  {name}")
 
