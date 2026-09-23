@@ -1,0 +1,15 @@
+a = 10
+
+if a == 10:
+    a = 20
+elif a == 0:
+    a = "bad"
+else:
+    a = 40
+
+b = a + 1
+
+a = "done"
+
+print(b)
+print(a)

@@ -393,18 +393,17 @@ def repair(lines):
     changed = True
 
     # Première phase :
-    # abaissement numérique natif avec analyse locale du flot.
+    # spécialisation numérique sensible au flot.
     #
-    # Deux contextes sont suivis :
+    # Une chaîne if / else if / else possède :
     #
-    # - flow_dynamic_ints :
-    #     faits connus au niveau principal de main()
+    # - un état d'entrée commun ;
+    # - un état de sortie pour chaque branche ;
+    # - éventuellement un chemin implicite si aucun else
+    #   final n'existe.
     #
-    # - branch_dynamic_ints :
-    #     copie locale de ces faits à l'entrée d'un if simple
-    #
-    # Les faits d'une branche ne sont jamais propagés après
-    # la sortie du bloc.
+    # Après la chaîne, seules les variables connues entières
+    # sur TOUS les chemins restent connues entières.
     while changed:
         changed = False
         new_output = []
@@ -412,73 +411,170 @@ def repair(lines):
 
         flow_dynamic_ints = set()
 
+        # État de la branche actuellement analysée.
         branch_dynamic_ints = None
         branch_depth = None
+
+        # État global d'une chaîne if / elif / else.
+        chain_entry_ints = None
+        chain_branch_exits = []
+        chain_has_else = False
+        chain_pending_close = False
 
         in_main = False
         main_depth = 0
 
+        def merge_chain():
+            nonlocal chain_entry_ints
+            nonlocal chain_branch_exits
+            nonlocal chain_has_else
+            nonlocal chain_pending_close
+            nonlocal flow_dynamic_ints
+
+            if chain_entry_ints is None:
+                return
+
+            exits = [
+                set(values)
+                for values in chain_branch_exits
+            ]
+
+            # Sans else final, la condition peut être fausse
+            # pour toutes les branches : l'état d'entrée est
+            # donc lui-même un chemin de sortie possible.
+            if not chain_has_else:
+                exits.append(set(chain_entry_ints))
+
+            if exits:
+                merged = set(exits[0])
+
+                for values in exits[1:]:
+                    merged.intersection_update(values)
+            else:
+                merged = set()
+
+            flow_dynamic_ints = merged
+
+            chain_entry_ints = None
+            chain_branch_exits = []
+            chain_has_else = False
+            chain_pending_close = False
+
         for line in lines:
             if (
                 not in_main
-                and re.match(r'^\s*int\s+main\s*\(', line)
+                and re.match(
+                    r'^\s*int\s+main\s*\(',
+                    line
+                )
             ):
                 in_main = True
+
+            stripped = line.strip()
+
+            # ------------------------------------------------
+            # Une branche précédente vient de se fermer.
+            #
+            # Le C généré place généralement :
+            #
+            #     }
+            #     else if (...) {
+            #
+            # sur deux lignes distinctes.
+            #
+            # On attend donc la ligne suivante avant de savoir
+            # si la chaîne continue ou si elle est terminée.
+            # ------------------------------------------------
+            continuing_chain = False
+
+            if (
+                chain_pending_close
+                and stripped
+            ):
+                is_else_if = (
+                    re.match(
+                        r'^else\s+if\s*\(',
+                        stripped
+                    )
+                    is not None
+                )
+
+                is_else = (
+                    re.match(
+                        r'^else\s*\{',
+                        stripped
+                    )
+                    is not None
+                )
+
+                if is_else_if or is_else:
+                    chain_pending_close = False
+
+                    branch_dynamic_ints = set(
+                        chain_entry_ints
+                        if chain_entry_ints is not None
+                        else ()
+                    )
+
+                    continuing_chain = True
+
+                    if is_else:
+                        chain_has_else = True
+
+                else:
+                    # Première instruction située après toute
+                    # la chaîne : fusionner avant de l'analyser.
+                    merge_chain()
 
             top_level_main = (
                 in_main
                 and main_depth == 1
             )
 
-            # Ne jamais réutiliser l'état du premier if dans
-            # un else / else if. Ces branches seront optimisées
-            # plus tard avec une vraie fusion de flot.
-            if (
-                branch_dynamic_ints is not None
-                and re.match(
-                    r'^\s*}?\s*else\b',
-                    line
-                )
-            ):
-                branch_dynamic_ints = None
-                branch_depth = None
-
-            in_simple_if = (
+            in_branch = (
                 in_main
                 and branch_dynamic_ints is not None
                 and branch_depth is not None
                 and main_depth == branch_depth
             )
 
-            if top_level_main:
-                flow_context = flow_dynamic_ints
-            elif in_simple_if:
+            if continuing_chain:
                 flow_context = branch_dynamic_ints
+
+            elif in_branch:
+                flow_context = branch_dynamic_ints
+
+            elif top_level_main:
+                flow_context = flow_dynamic_ints
+
             else:
                 flow_context = None
 
-            # Repérer un if directement dans main().
-            entering_simple_if = (
+            # Nouveau if directement dans main().
+            entering_if_chain = (
                 top_level_main
+                and chain_entry_ints is None
                 and re.match(
-                    r'^\s*if\s*\(',
-                    line
+                    r'^if\s*\(',
+                    stripped
                 ) is not None
             )
 
+            # --------------------------------------------
             # NvVal x = expression;
-            m = re.match(
+            # --------------------------------------------
+            declaration = re.match(
                 r'^(\s*)NvVal\s+'
                 r'([A-Za-z_][A-Za-z0-9_]*)'
                 r'\s*=\s*(.*?)\s*;\s*$',
                 line
             )
 
-            if m:
+            if declaration:
                 indent, name, rhs = (
-                    m.group(1),
-                    m.group(2),
-                    m.group(3),
+                    declaration.group(1),
+                    declaration.group(2),
+                    declaration.group(3),
                 )
 
                 lowered = lower(
@@ -487,14 +583,11 @@ def repair(lines):
                     flow_context,
                 )
 
-                # Temporaires internes de selon :
-                # toujours dynamiques.
                 if name.startswith("__match"):
                     pass
 
-                # Variable Clariox instable :
-                # elle reste NvVal mais son type courant
-                # peut être connu localement.
+                # Variable globalement instable :
+                # garder NvVal, mais suivre son type local.
                 elif name in unsafe_ints:
                     if flow_context is not None:
                         if (
@@ -506,7 +599,7 @@ def repair(lines):
                             flow_context.discard(name)
 
                 # Variable stable :
-                # spécialisation vers long long.
+                # abaissement en entier C natif.
                 elif (
                     lowered is not None
                     and lowered[1] == "int"
@@ -524,17 +617,19 @@ def repair(lines):
 
                     changed = True
 
-            # Réaffectation d'une variable dynamique.
+            # --------------------------------------------
+            # Réaffectation simple.
+            # --------------------------------------------
             if flow_context is not None:
-                assign = re.match(
+                assignment = re.match(
                     r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
                     r'\s*=\s*(.*?)\s*;\s*$',
                     line
                 )
 
-                if assign:
-                    name = assign.group(1)
-                    rhs = assign.group(2)
+                if assignment:
+                    name = assignment.group(1)
+                    rhs = assignment.group(2)
 
                     if (
                         name in unsafe_ints
@@ -554,7 +649,9 @@ def repair(lines):
                         else:
                             flow_context.discard(name)
 
+            # --------------------------------------------
             # Conditions numériques.
+            # --------------------------------------------
             def truth_callback(inner):
                 lowered = lower(
                     inner,
@@ -581,7 +678,9 @@ def repair(lines):
 
             new_output.append(new_line)
 
+            # --------------------------------------------
             # Mise à jour de la profondeur C.
+            # --------------------------------------------
             if in_main:
                 opens = new_line.count("{")
                 closes = new_line.count("}")
@@ -589,30 +688,39 @@ def repair(lines):
                 old_depth = main_depth
                 main_depth += opens - closes
 
-                # Entrée dans un if simple directement sous main().
+                # Premier if de la chaîne.
                 if (
-                    entering_simple_if
+                    entering_if_chain
                     and old_depth == 1
                     and main_depth == 2
                 ):
-                    branch_dynamic_ints = set(
+                    chain_entry_ints = set(
                         flow_dynamic_ints
+                    )
+
+                    chain_branch_exits = []
+                    chain_has_else = False
+                    chain_pending_close = False
+
+                    branch_dynamic_ints = set(
+                        chain_entry_ints
                     )
                     branch_depth = 2
 
-                    # Les faits extérieurs ne seront pas
-                    # réutilisés après le bloc.
+                    # L'état principal sera restauré par
+                    # merge_chain() à la fin de la chaîne.
                     flow_dynamic_ints.clear()
 
-                # Autre bloc : while, bloc imbriqué, etc.
+                # Nouvelle branche else / else if.
                 elif (
-                    old_depth == 1
-                    and main_depth > 1
+                    continuing_chain
+                    and old_depth == 1
+                    and main_depth == 2
                 ):
-                    flow_dynamic_ints.clear()
+                    branch_depth = 2
 
-                # Bloc imbriqué à l'intérieur du if :
-                # abandonner les faits locaux pour rester sûr.
+                # Bloc imbriqué dans une branche :
+                # abandon conservateur des faits locaux.
                 if (
                     branch_dynamic_ints is not None
                     and branch_depth is not None
@@ -621,8 +729,6 @@ def repair(lines):
                 ):
                     branch_dynamic_ints.clear()
 
-                # Retour d'un bloc imbriqué dans le if :
-                # ne rien supposer.
                 if (
                     branch_dynamic_ints is not None
                     and branch_depth is not None
@@ -631,22 +737,43 @@ def repair(lines):
                 ):
                     branch_dynamic_ints.clear()
 
-                # Sortie du if vers main().
+                # Fin d'une branche de la chaîne.
                 if (
-                    old_depth > 1
+                    chain_entry_ints is not None
+                    and branch_depth is not None
+                    and old_depth == branch_depth
                     and main_depth == 1
                 ):
+                    chain_branch_exits.append(
+                        set(
+                            branch_dynamic_ints
+                            if branch_dynamic_ints is not None
+                            else ()
+                        )
+                    )
+
                     branch_dynamic_ints = None
                     branch_depth = None
-                    flow_dynamic_ints.clear()
 
+                    # Ne pas fusionner immédiatement :
+                    # la prochaine ligne peut être else/elif.
+                    chain_pending_close = True
+
+                # Sortie de main().
                 if main_depth <= 0 and old_depth > 0:
+                    if chain_pending_close:
+                        merge_chain()
+
                     in_main = False
                     main_depth = 0
 
                     branch_dynamic_ints = None
                     branch_depth = None
                     flow_dynamic_ints.clear()
+
+        # Cas où une chaîne termine juste avant EOF.
+        if chain_pending_close:
+            merge_chain()
 
         lines = new_output
 

@@ -1,0 +1,13 @@
+a = 10
+
+if a == 10:
+    a = 20
+else:
+    a = "bad"
+
+b = a + 1
+
+a = "done"
+
+print(b)
+print(a)
