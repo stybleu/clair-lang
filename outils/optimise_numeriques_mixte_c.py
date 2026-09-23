@@ -545,6 +545,7 @@ def repair(lines):
 
     flow_numeric_types = {}
     flow_float_specialized = []
+    flow_float_loop_rewritten = []
 
     numeric_output = []
 
@@ -853,6 +854,69 @@ def repair(lines):
 
         stripped = source_line.strip()
 
+        # ----------------------------------------------------
+        # Calculs float natifs à l'intérieur d'un while.
+        #
+        # analyze_float_while_invariants() a déjà prouvé que
+        # les variables présentes dans pending_while_types
+        # restent double sur toutes leurs réaffectations.
+        #
+        # La variable elle-même reste NvVal si nécessaire,
+        # mais son calcul peut éviter nv_add/nv_sub/nv_mul/
+        # nv_div et utiliser directement les opérateurs C.
+        #
+        # Exemple :
+        #
+        #     a = nv_add(a, nv_float(1.0));
+        #
+        # devient :
+        #
+        #     a = nv_float((nv_num(a) + 1.0));
+        # ----------------------------------------------------
+
+        if (
+            pending_while_end is not None
+            and pending_while_types
+            and flow_line_index <= pending_while_end
+        ):
+            loop_assignment = re.match(
+                r'^(\s*)'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.*?)\s*;\s*$',
+                source_line,
+            )
+
+            if loop_assignment:
+                loop_indent = loop_assignment.group(1)
+                loop_name = loop_assignment.group(2)
+                loop_rhs = loop_assignment.group(3)
+
+                if (
+                    pending_while_types.get(loop_name)
+                    == "double"
+                ):
+                    loop_lowered = lower_flow_number(
+                        loop_rhs,
+                        native_ints,
+                        native_floats,
+                        pending_while_types,
+                    )
+
+                    if (
+                        loop_lowered is not None
+                        and loop_lowered[1] == "double"
+                    ):
+                        source_line = (
+                            f"{loop_indent}{loop_name} = "
+                            f"nv_float({loop_lowered[0]});\n"
+                        )
+
+                        stripped = source_line.strip()
+
+                        flow_float_loop_rewritten.append(
+                            loop_name
+                        )
+
         if (
             top_level_main
             and re.match(
@@ -1047,6 +1111,16 @@ def repair(lines):
 
         for name in sorted(
             set(flow_float_specialized)
+        ):
+            print(f"  {name}")
+
+    if flow_float_loop_rewritten:
+        print(
+            "[Clariox OPT] Calculs float natifs dans while :"
+        )
+
+        for name in sorted(
+            set(flow_float_loop_rewritten)
         ):
             print(f"  {name}")
 
