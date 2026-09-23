@@ -407,6 +407,50 @@ def main():
         if not name.startswith("clariox_range_"):
             types.pop(name, None)
 
+    # Une variable peut avoir été inférée à partir d'une autre
+    # variable qui vient ensuite d'être déclarée dynamique.
+    #
+    # Exemple :
+    #
+    #     a = 10
+    #     b = a + 20
+    #     a = "hello"
+    #
+    # Après l'invalidation de a, b ne doit pas rester dans
+    # types si son expression ne peut plus être convertie
+    # avec les types natifs encore valides.
+    #
+    # Répéter jusqu'au point fixe afin de gérer les chaînes
+    # de dépendances : a -> b -> c -> ...
+    dependencies_changed = True
+
+    while dependencies_changed:
+        dependencies_changed = False
+
+        for line in body:
+            m = re.match(
+                r'\s*NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.+);\s*$',
+                line
+            )
+
+            if not m:
+                continue
+
+            name, rhs = m.groups()
+
+            if name not in types:
+                continue
+
+            if name.startswith("clariox_range_"):
+                continue
+
+            converted = convert_expr(rhs, types)
+
+            if converted is None:
+                types.pop(name, None)
+                dependencies_changed = True
+
     print("[Clariox OPT] Types natifs :")
 
     for name in sorted(types):

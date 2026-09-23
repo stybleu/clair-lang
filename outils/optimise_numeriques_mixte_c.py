@@ -282,6 +282,109 @@ def repair(lines):
 
     discover_native_types(lines)
 
+    # --------------------------------------------------------
+    # Détection des variables numériques instables.
+    #
+    # Une variable Clariox non typée peut légalement changer
+    # de type :
+    #
+    #     value = 26
+    #     value = "Alice"
+    #
+    # Elle ne doit donc jamais être abaissée en long long.
+    #
+    # On détermine d'abord les variables qui pourraient être
+    # des entiers natifs, puis on vérifie toutes leurs
+    # réaffectations avant de modifier le C.
+    # --------------------------------------------------------
+
+    # Les variables déjà natives ont été validées par
+    # optimise_numeriques_c.py. Cette passe ne doit pas
+    # remettre en cause cette décision.
+    already_native_ints = set(native_ints)
+
+    candidate_ints = set(native_ints)
+
+    candidate_changed = True
+
+    while candidate_changed:
+        candidate_changed = False
+
+        for line in lines:
+            m = re.match(
+                r'^\s*NvVal\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.*?)\s*;\s*$',
+                line
+            )
+
+            if not m:
+                continue
+
+            name = m.group(1)
+            rhs = m.group(2)
+
+            if name.startswith("__match"):
+                continue
+
+            lowered = lower(rhs, candidate_ints)
+
+            if (
+                lowered is not None
+                and lowered[1] == "int"
+                and name not in candidate_ints
+            ):
+                candidate_ints.add(name)
+                candidate_changed = True
+
+    unsafe_ints = set()
+
+    for line in lines:
+        # Affectation simple, sans déclaration.
+        #
+        # Ne correspond pas à :
+        #     NvVal x = ...
+        #     long long x = ...
+        #
+        # mais correspond à :
+        #     x = ...
+        m = re.match(
+            r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.*?)\s*;\s*$',
+            line
+        )
+
+        if not m:
+            continue
+
+        name = m.group(1)
+        rhs = m.group(2)
+
+        if name not in candidate_ints:
+            continue
+
+        # Déjà validé et spécialisé par l'optimiseur
+        # numérique principal : ne pas refaire son analyse.
+        if name in already_native_ints:
+            continue
+
+        lowered = lower(rhs, candidate_ints)
+
+        if (
+            lowered is None
+            or lowered[1] != "int"
+        ):
+            unsafe_ints.add(name)
+
+    if unsafe_ints:
+        print(
+            "[Clariox OPT] Variables dynamiques "
+            "conservées :"
+        )
+
+        for name in sorted(unsafe_ints):
+            print(f"  {name}")
+
     changed = True
 
     # Première phase :
@@ -310,7 +413,10 @@ def repair(lines):
                 # Les temporaires de "selon" doivent rester NvVal :
                 # ils sont utilisés ensuite par les comparaisons
                 # dynamiques du runtime.
-                if not name.startswith("__match"):
+                if (
+                    not name.startswith("__match")
+                    and name not in unsafe_ints
+                ):
                     lowered = lower(rhs, known)
 
                     if lowered and lowered[1] == "int":
