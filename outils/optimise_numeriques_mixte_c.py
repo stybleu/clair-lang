@@ -722,8 +722,119 @@ def repair(lines):
 
         return chain_end, merged
 
+    # --------------------------------------------------------
+    # Analyse à point fixe des float à travers while.
+    #
+    # On ne conserve ici que les variables connues double à
+    # l'entrée de la boucle.
+    #
+    # Une variable reste garantie double après le while si :
+    #
+    # - elle est double avant la boucle ;
+    # - chacune de ses réaffectations possibles reste double ;
+    # - toutes ses dépendances restent elles-mêmes valides.
+    #
+    # Le calcul est répété jusqu'au point fixe afin de gérer :
+    #
+    #     a dépend de b
+    #     b cesse d'être double
+    #     => a cesse aussi d'être garanti double.
+    #
+    # Cela reste sûr même si la boucle effectue zéro itération.
+    # --------------------------------------------------------
+
+    def analyze_float_while_invariants(
+        start_index,
+        entry_types,
+    ):
+        candidates = {
+            name: typ
+            for name, typ in entry_types.items()
+            if typ == "double"
+        }
+
+        if not candidates:
+            return start_index, {}
+
+        first = lines[start_index]
+
+        depth = (
+            first.count("{")
+            - first.count("}")
+        )
+
+        if depth <= 0:
+            return start_index, {}
+
+        body = []
+        index = start_index + 1
+        loop_end = start_index
+
+        while index < len(lines) and depth > 0:
+            current = lines[index]
+
+            body.append(current)
+
+            depth += (
+                current.count("{")
+                - current.count("}")
+            )
+
+            loop_end = index
+            index += 1
+
+        # C incomplet ou mal structuré :
+        # abandon conservateur.
+        if depth != 0:
+            return loop_end, {}
+
+        while True:
+            removed = set()
+
+            for current in body:
+                assignment = re.match(
+                    r'^\s*'
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.*?)\s*;\s*$',
+                    current,
+                )
+
+                if not assignment:
+                    continue
+
+                name = assignment.group(1)
+
+                if name not in candidates:
+                    continue
+
+                rhs = assignment.group(2)
+
+                lowered = lower_flow_number(
+                    rhs,
+                    native_ints,
+                    native_floats,
+                    candidates,
+                )
+
+                if (
+                    lowered is None
+                    or lowered[1] != "double"
+                ):
+                    removed.add(name)
+
+            if not removed:
+                break
+
+            for name in removed:
+                candidates.pop(name, None)
+
+        return loop_end, candidates
+
     pending_if_end = None
     pending_if_types = None
+
+    pending_while_end = None
+    pending_while_types = None
 
     for flow_line_index, source_line in enumerate(lines):
         if (
@@ -764,12 +875,30 @@ def repair(lines):
         elif (
             top_level_main
             and re.match(
-                r'^(?:while|for|switch)\b',
+                r'^while\s*\(',
                 stripped,
             )
         ):
-            # while/for/switch restent des barrières pour
-            # l'analyse float dans cette étape.
+            (
+                pending_while_end,
+                pending_while_types,
+            ) = analyze_float_while_invariants(
+                flow_line_index,
+                flow_numeric_types,
+            )
+
+            # Les faits ne seront restaurés qu'à la sortie de
+            # la boucle, après validation à point fixe.
+            flow_numeric_types.clear()
+
+        elif (
+            top_level_main
+            and re.match(
+                r'^(?:for|switch)\b',
+                stripped,
+            )
+        ):
+            # for/switch restent des barrières conservatrices.
             flow_numeric_types.clear()
 
         if top_level_main:
@@ -884,6 +1013,20 @@ def repair(lines):
                 pending_if_end = None
                 pending_if_types = None
 
+            # Fin d'un while analysé :
+            # restaurer uniquement les float garantis invariants
+            # sur toutes les réaffectations possibles.
+            if (
+                pending_while_end is not None
+                and flow_line_index == pending_while_end
+            ):
+                flow_numeric_types = dict(
+                    pending_while_types or {}
+                )
+
+                pending_while_end = None
+                pending_while_types = None
+
             if flow_depth <= 0:
                 flow_in_main = False
                 flow_depth = 0
@@ -891,6 +1034,9 @@ def repair(lines):
 
                 pending_if_end = None
                 pending_if_types = None
+
+                pending_while_end = None
+                pending_while_types = None
 
     lines = numeric_output
 

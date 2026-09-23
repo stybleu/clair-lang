@@ -1,0 +1,9 @@
+flag = 0
+a = 1.5
+
+while flag == 1:
+    a = "bad"
+
+b = a + 2.0
+
+print(b)

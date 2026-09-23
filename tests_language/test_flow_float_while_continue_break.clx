@@ -1,0 +1,19 @@
+i = 0
+a = 1.5
+
+while i < 4:
+    i = i + 1
+
+    if i == 2:
+        continue
+
+    a = a + 1.0
+
+    if i == 3:
+        break
+
+b = a + 1.0
+
+a = "done"
+
+print(b)

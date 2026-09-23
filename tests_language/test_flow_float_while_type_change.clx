@@ -1,0 +1,11 @@
+flag = 0
+a = 1.5
+
+while flag == 1:
+    a = 2
+
+b = a + 1.0
+
+a = "done"
+
+print(b)
