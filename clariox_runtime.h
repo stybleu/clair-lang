@@ -1172,17 +1172,10 @@ static NvVal nv_not(NvVal a){
     return nv_bool(!nv_truth(a));
 }
 
-static NvVal nv_and(NvVal a,NvVal b){
-    return nv_bool(
-        nv_truth(a)&&nv_truth(b)
-    );
-}
-
-static NvVal nv_or(NvVal a,NvVal b){
-    return nv_bool(
-        nv_truth(a)||nv_truth(b)
-    );
-}
+/* and/or sont volontairement des macros : */
+/* cela garantit le court-circuit du second opérande. */
+#define nv_and(left,right) nv_bool(nv_truth((left)) && nv_truth((right)))
+#define nv_or(left,right) nv_bool(nv_truth((left)) || nv_truth((right)))
 
 static int nv_same(NvVal a,NvVal b){
     if(a.kind!=b.kind){

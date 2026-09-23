@@ -1,0 +1,6 @@
+x = 0
+
+if x == 0 or 10 / x > 1:
+    print("or-ok")
+else:
+    print("bad")
