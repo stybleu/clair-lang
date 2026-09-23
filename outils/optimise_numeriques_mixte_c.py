@@ -551,7 +551,181 @@ def repair(lines):
     flow_in_main = False
     flow_depth = 0
 
-    for source_line in lines:
+    # --------------------------------------------------------
+    # Fusion flow-sensitive des float à travers une chaîne
+    # if / else if / else située directement dans main().
+    #
+    # Une information de type n'est conservée après la chaîne
+    # que si elle est vraie sur TOUS les chemins possibles.
+    #
+    # Sans else final, l'état d'entrée constitue lui aussi un
+    # chemin possible.
+    # --------------------------------------------------------
+
+    def analyze_float_if_chain(
+        start_index,
+        entry_types,
+    ):
+        tracked = set(entry_types)
+
+        if not tracked:
+            return start_index, {}
+
+        branch_exits = []
+        has_else = False
+
+        index = start_index
+        chain_end = start_index
+
+        while index < len(lines):
+            header = lines[index].strip()
+
+            is_if = (
+                re.match(
+                    r'^(?:if|else\s+if)\s*\(',
+                    header,
+                )
+                is not None
+            )
+
+            is_else = (
+                re.match(
+                    r'^else\s*\{',
+                    header,
+                )
+                is not None
+            )
+
+            if not is_if and not is_else:
+                break
+
+            if is_else:
+                has_else = True
+
+            state = dict(entry_types)
+
+            depth = (
+                lines[index].count("{")
+                - lines[index].count("}")
+            )
+
+            if depth <= 0:
+                return start_index, {}
+
+            nested_control = False
+
+            index += 1
+
+            while index < len(lines) and depth > 0:
+                current = lines[index]
+                old_depth = depth
+
+                opens = current.count("{")
+                closes = current.count("}")
+
+                # Un bloc imbriqué dans une branche nécessitera
+                # sa propre analyse de flot. Pour cette première
+                # version, abandon conservateur de cette branche.
+                if old_depth > 1 or (
+                    old_depth == 1
+                    and opens > 0
+                ):
+                    nested_control = True
+
+                # Affectations directement dans la branche.
+                if old_depth == 1:
+                    assignment = re.match(
+                        r'^\s*'
+                        r'([A-Za-z_][A-Za-z0-9_]*)'
+                        r'\s*=\s*(.*?)\s*;\s*$',
+                        current,
+                    )
+
+                    if assignment:
+                        name = assignment.group(1)
+                        rhs = assignment.group(2)
+
+                        if name in tracked:
+                            lowered = lower_flow_number(
+                                rhs,
+                                native_ints,
+                                native_floats,
+                                state,
+                            )
+
+                            if lowered is None:
+                                state.pop(name, None)
+                            else:
+                                state[name] = lowered[1]
+
+                depth += opens - closes
+                chain_end = index
+                index += 1
+
+            if depth != 0:
+                return chain_end, {}
+
+            if nested_control:
+                state = {}
+
+            branch_exits.append(state)
+
+            # Chercher une éventuelle branche suivante.
+            look = index
+
+            while (
+                look < len(lines)
+                and not lines[look].strip()
+            ):
+                look += 1
+
+            if look < len(lines):
+                next_line = lines[look].strip()
+
+                if (
+                    re.match(
+                        r'^else\s+if\s*\(',
+                        next_line,
+                    )
+                    or re.match(
+                        r'^else\s*\{',
+                        next_line,
+                    )
+                ):
+                    index = look
+                    continue
+
+            break
+
+        # Sans else final, aucune branche peut être exécutée.
+        if not has_else:
+            branch_exits.append(
+                dict(entry_types)
+            )
+
+        if not branch_exits:
+            return chain_end, {}
+
+        merged = {}
+
+        for name in tracked:
+            values = [
+                state.get(name)
+                for state in branch_exits
+            ]
+
+            if (
+                all(value is not None for value in values)
+                and len(set(values)) == 1
+            ):
+                merged[name] = values[0]
+
+        return chain_end, merged
+
+    pending_if_end = None
+    pending_if_types = None
+
+    for flow_line_index, source_line in enumerate(lines):
         if (
             not flow_in_main
             and re.match(
@@ -571,12 +745,31 @@ def repair(lines):
         if (
             top_level_main
             and re.match(
-                r'^(?:if|while|for|switch)\b',
+                r'^if\s*\(',
                 stripped,
             )
         ):
-            # Première version volontairement conservatrice :
-            # aucun fait local ne traverse un bloc de contrôle.
+            (
+                pending_if_end,
+                pending_if_types,
+            ) = analyze_float_if_chain(
+                flow_line_index,
+                flow_numeric_types,
+            )
+
+            # Les faits seront restaurés uniquement à la fin
+            # de la chaîne, après fusion de tous les chemins.
+            flow_numeric_types.clear()
+
+        elif (
+            top_level_main
+            and re.match(
+                r'^(?:while|for|switch)\b',
+                stripped,
+            )
+        ):
+            # while/for/switch restent des barrières pour
+            # l'analyse float dans cette étape.
             flow_numeric_types.clear()
 
         if top_level_main:
@@ -677,10 +870,27 @@ def repair(lines):
                 - source_line.count("}")
             )
 
+            # Fin d'une chaîne if analysée :
+            # restaurer uniquement les types garantis sur
+            # tous ses chemins de sortie.
+            if (
+                pending_if_end is not None
+                and flow_line_index == pending_if_end
+            ):
+                flow_numeric_types = dict(
+                    pending_if_types or {}
+                )
+
+                pending_if_end = None
+                pending_if_types = None
+
             if flow_depth <= 0:
                 flow_in_main = False
                 flow_depth = 0
                 flow_numeric_types.clear()
+
+                pending_if_end = None
+                pending_if_types = None
 
     lines = numeric_output
 

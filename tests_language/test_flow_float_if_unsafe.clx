@@ -1,0 +1,11 @@
+flag = 0
+a = 1.5
+
+if flag == 1:
+    a = "bad"
+else:
+    a = 3.5
+
+b = a + 1.0
+
+print(b)

@@ -1,0 +1,13 @@
+flag = 1
+a = 1.5
+
+if flag == 1:
+    a = 2.5
+else:
+    a = 3.5
+
+b = a + 1.0
+
+a = "done"
+
+print(b)
