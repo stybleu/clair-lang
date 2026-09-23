@@ -1,0 +1,3 @@
+manual buffer = alloc(16)
+
+buffer.fill(300)

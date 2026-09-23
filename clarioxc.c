@@ -168,6 +168,7 @@ static FuncMeta *find_method(const char *owner, const char *name) {
 
 typedef struct {
     char vars[MAX_VARS][MAX_NAME];
+    char var_types[MAX_VARS][MAX_NAME];
     int count;
 } VarScope;
 
@@ -176,17 +177,93 @@ static VarScope func_scope;
 static VarScope main_consts;
 static VarScope func_consts;
 
-static int scope_has(VarScope *s, const char *name) {
+static int scope_find_index(
+    VarScope *s,
+    const char *name
+) {
     for (int i = 0; i < s->count; i++) {
-        if (strcmp(s->vars[i], name) == 0) return 1;
+        if (strcmp(s->vars[i], name) == 0) {
+            return i;
+        }
     }
-    return 0;
+
+    return -1;
 }
 
-static void scope_add(VarScope *s, const char *name) {
-    if (scope_has(s, name)) return;
-    if (s->count >= MAX_VARS) die("Trop de variables");
-    snprintf(s->vars[s->count++], MAX_NAME, "%s", name);
+static int scope_has(
+    VarScope *s,
+    const char *name
+) {
+    return scope_find_index(s, name) >= 0;
+}
+
+static const char *scope_get_type(
+    VarScope *s,
+    const char *name
+) {
+    int i = scope_find_index(s, name);
+
+    if (i < 0 || !s->var_types[i][0]) {
+        return NULL;
+    }
+
+    return s->var_types[i];
+}
+
+static void scope_add_typed(
+    VarScope *s,
+    const char *name,
+    const char *type
+) {
+    int existing = scope_find_index(s, name);
+
+    if (existing >= 0) {
+        if (
+            type &&
+            *type &&
+            !s->var_types[existing][0]
+        ) {
+            snprintf(
+                s->var_types[existing],
+                MAX_NAME,
+                "%s",
+                type
+            );
+        }
+
+        return;
+    }
+
+    if (s->count >= MAX_VARS) {
+        die("Trop de variables");
+    }
+
+    int i = s->count++;
+
+    snprintf(
+        s->vars[i],
+        MAX_NAME,
+        "%s",
+        name
+    );
+
+    s->var_types[i][0] = '\0';
+
+    if (type && *type) {
+        snprintf(
+            s->var_types[i],
+            MAX_NAME,
+            "%s",
+            type
+        );
+    }
+}
+
+static void scope_add(
+    VarScope *s,
+    const char *name
+) {
+    scope_add_typed(s, name, NULL);
 }
 
 /* ============================
@@ -779,6 +856,12 @@ static const char *RUNTIME_C =
 "static NvVal nv_memory_size(NvVal v){ NvMemory*m=nv_memory_get(v); return nv_int((long long)m->size); }\n"
 "static NvVal nv_memory_read(NvVal v,NvVal index){ NvMemory*m=nv_memory_get(v); long long i=(long long)nv_num(index); if(i<0||(unsigned long long)i>=(unsigned long long)m->size)nv_throw(\"Memory index out of range\"); return nv_int((long long)m->data[i]); }\n"
 "static NvVal nv_memory_write(NvVal v,NvVal index,NvVal value){ NvMemory*m=nv_memory_get(v); long long i=(long long)nv_num(index); long long x=(long long)nv_num(value); if(i<0||(unsigned long long)i>=(unsigned long long)m->size)nv_throw(\"Memory index out of range\"); if(x<0||x>255)nv_throw(\"Memory byte must be between 0 and 255\"); m->data[i]=(unsigned char)x; return nv_none(); }\n"
+"static unsigned char nv_memory_byte(NvVal v){ long long x=(long long)nv_num(v); if(x<0||x>255)nv_throw(\"Memory byte must be between 0 and 255\"); return (unsigned char)x; }\n"
+"static size_t nv_memory_offset(NvVal v){ long long x=(long long)nv_num(v); if(x<0)nv_throw(\"Memory offset must not be negative\"); return (size_t)x; }\n"
+"static NvVal nv_memory_fill_all(NvVal v,NvVal value){ NvMemory*m=nv_memory_get(v); unsigned char x=nv_memory_byte(value); memset(m->data,x,m->size); return nv_none(); }\n"
+"static NvVal nv_memory_fill_range(NvVal v,NvVal value,NvVal offsetv,NvVal lengthv){ NvMemory*m=nv_memory_get(v); unsigned char x=nv_memory_byte(value); size_t offset=nv_memory_offset(offsetv); size_t length=nv_memory_offset(lengthv); if(offset>m->size||length>m->size-offset)nv_throw(\"Memory fill range out of bounds\"); memset(m->data+offset,x,length); return nv_none(); }\n"
+"static NvVal nv_memory_copy_all(NvVal dstv,NvVal srcv){ NvMemory*dst=nv_memory_get(dstv); NvMemory*src=nv_memory_get(srcv); if(src->size>dst->size)nv_throw(\"Source memory block does not fit in destination\"); memmove(dst->data,src->data,src->size); return nv_none(); }\n"
+"static NvVal nv_memory_copy_range(NvVal dstv,NvVal srcv,NvVal srcoffv,NvVal dstoffv,NvVal lengthv){ NvMemory*dst=nv_memory_get(dstv); NvMemory*src=nv_memory_get(srcv); size_t srcoff=nv_memory_offset(srcoffv); size_t dstoff=nv_memory_offset(dstoffv); size_t length=nv_memory_offset(lengthv); if(srcoff>src->size||length>src->size-srcoff)nv_throw(\"Source memory range out of bounds\"); if(dstoff>dst->size||length>dst->size-dstoff)nv_throw(\"Destination memory range out of bounds\"); memmove(dst->data+dstoff,src->data+srcoff,length); return nv_none(); }\n"
 "static NvVal nv_add(NvVal a,NvVal b){ if(a.kind==NV_STR&&b.kind==NV_STR){size_t n=strlen(a.as.s)+strlen(b.as.s)+1;char*p=nv_xmalloc(n);snprintf(p,n,\"%s%s\",a.as.s,b.as.s);NvVal v=nv_str(p);free(p);return v;} if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i+b.as.i); return nv_float(nv_num(a)+nv_num(b));}\n"
 "static NvVal nv_sub(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i-b.as.i); return nv_float(nv_num(a)-nv_num(b));}\n"
 "static NvVal nv_mul(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i*b.as.i); return nv_float(nv_num(a)*nv_num(b));}\n"
@@ -987,7 +1070,11 @@ static void emit_function_header(FuncMeta *fm,int indent) {
         ParamMeta *p=&fm->params[i];
         fprintf(func_out,"    NvVal %s = nv_arg(__args, __argc, __kwargs, %d, \"%s\");\n",p->name,i,p->name);
         if(p->type[0])fprintf(func_out,"    nv_expect_type(%s, \"%s\", \"%s\");\n",p->name,p->type,p->name);
-        scope_add(&func_scope,p->name);
+        scope_add_typed(
+            &func_scope,
+            p->name,
+            p->type[0] ? p->type : NULL
+        );
     }
     (void)indent;
 }
@@ -1019,6 +1106,133 @@ static int find_top_level_assignment(const char *s, int *op_len) {
     return -1;
 }
 
+
+/* ============================
+   Vérification statique simple des types
+   ============================ */
+
+static int is_builtin_static_type(const char *type) {
+    if (!type || !*type) return 0;
+
+    return
+        strcmp(type, "int") == 0 ||
+        strcmp(type, "float") == 0 ||
+        strcmp(type, "str") == 0 ||
+        strcmp(type, "bool") == 0 ||
+        strcmp(type, "none") == 0;
+}
+
+static const char *infer_simple_expr_type(
+    const char *src,
+    int lineno
+) {
+    Lexer lx;
+    lexer_init(&lx, src, lineno);
+
+    /* "Alice" */
+    if (
+        lx.cur.kind == TK_STRING &&
+        lx.next.kind == TK_EOF
+    ) {
+        return "str";
+    }
+
+    /* 42 / 2.5 */
+    if (
+        lx.cur.kind == TK_NUMBER &&
+        lx.next.kind == TK_EOF
+    ) {
+        if (
+            strchr(lx.cur.text, '.') ||
+            strchr(lx.cur.text, 'e') ||
+            strchr(lx.cur.text, 'E')
+        ) {
+            return "float";
+        }
+
+        return "int";
+    }
+
+    /* -42 / +42 / -2.5 */
+    if (
+        (lx.cur.kind == TK_MINUS || lx.cur.kind == TK_PLUS) &&
+        lx.next.kind == TK_NUMBER
+    ) {
+        advance(&lx);
+
+        if (lx.next.kind != TK_EOF) {
+            return NULL;
+        }
+
+        if (
+            strchr(lx.cur.text, '.') ||
+            strchr(lx.cur.text, 'e') ||
+            strchr(lx.cur.text, 'E')
+        ) {
+            return "float";
+        }
+
+        return "int";
+    }
+
+    /* true / false / none */
+    if (
+        lx.cur.kind == TK_IDENT &&
+        lx.next.kind == TK_EOF
+    ) {
+        if (
+            strcmp(lx.cur.text, "true") == 0 ||
+            strcmp(lx.cur.text, "false") == 0
+        ) {
+            return "bool";
+        }
+
+        if (strcmp(lx.cur.text, "none") == 0) {
+            return "none";
+        }
+    }
+
+    /*
+     * Expression complexe :
+     * aucune conclusion statique pour le moment.
+     */
+    return NULL;
+}
+
+static int static_type_compatible(
+    const char *expected,
+    const char *actual
+) {
+    /*
+     * Ne pas bloquer les types utilisateur ou les types
+     * que cette première passe ne connaît pas encore.
+     */
+    if (!is_builtin_static_type(expected)) {
+        return 1;
+    }
+
+    if (!actual) {
+        return 1;
+    }
+
+    if (strcmp(expected, actual) == 0) {
+        return 1;
+    }
+
+    /*
+     * Clariox autorise déjà un int là où un float
+     * est demandé.
+     */
+    if (
+        strcmp(expected, "float") == 0 &&
+        strcmp(actual, "int") == 0
+    ) {
+        return 1;
+    }
+
+    return 0;
+}
+
 static void emit_set_lvalue(FILE*out,int indent,const char*lhs,const char*rhs,int lineno,VarScope*scope,const char*annot_type,const char*augop){
     char tmp[MAX_LINE];snprintf(tmp,sizeof(tmp),"%s",lhs);char*l=trim(tmp);
     /* champ objet : obj.nom */
@@ -1032,14 +1246,121 @@ static void emit_set_lvalue(FILE*out,int indent,const char*lhs,const char*rhs,in
     /* variable simple, éventuellement typée */
     char name[MAX_NAME];snprintf(name,sizeof(name),"%s",l);char typebuf[MAX_NAME]={0};char*colon=strchr(name,':');if(colon){*colon='\0';snprintf(typebuf,sizeof(typebuf),"%s",trim(colon+1));}
     char*vn=trim(name);if(!is_ident(vn))die("Line %d: invalid variable '%s'",lineno,vn);
-    const char*type = annot_type&&*annot_type?annot_type:(typebuf[0]?typebuf:NULL);
+    const char*type =
+        annot_type&&*annot_type
+        ? annot_type
+        : (typebuf[0] ? typebuf : NULL);
+
+    const char *declared_type =
+        scope_get_type(scope, vn);
+
+    /*
+     * Une variable déjà explicitement typée ne peut
+     * pas être réannotée avec un autre type.
+     */
+    if (
+        declared_type &&
+        type &&
+        strcmp(declared_type, type) != 0
+    ) {
+        die(
+            "Line %d: conflicting type for '%s': declared %s, found %s",
+            lineno,
+            vn,
+            declared_type,
+            type
+        );
+    }
+
+    /*
+     * Pour une nouvelle variable, l'annotation courante
+     * est le type attendu.
+     *
+     * Pour une variable existante explicitement typée,
+     * son type enregistré continue de s'appliquer aux
+     * affectations suivantes.
+     */
+    const char *expected_type =
+        declared_type
+        ? declared_type
+        : type;
+
+    int type_checked_statically = 0;
+
+    if (expected_type && !augop) {
+        const char *actual_type =
+            infer_simple_expr_type(rhs, lineno);
+
+        if (
+            actual_type &&
+            !static_type_compatible(
+                expected_type,
+                actual_type
+            )
+        ) {
+            die(
+                "Line %d: incompatible type for '%s': expected %s, found %s",
+                lineno,
+                vn,
+                expected_type,
+                actual_type
+            );
+        }
+
+        /*
+         * Le contrôle runtime n'est supprimé que pour
+         * l'annotation présente sur cette instruction.
+         */
+        if (
+            type &&
+            actual_type &&
+            is_builtin_static_type(type) &&
+            static_type_compatible(
+                type,
+                actual_type
+            )
+        ) {
+            type_checked_statically = 1;
+        }
+    }
+
     VarScope *consts = (scope == &func_scope) ? &func_consts : &main_consts;
     if (scope_has(consts, vn)) die("Line %d: '%s' is const and cannot be modified", lineno, vn);
     char*val=NULL;
     if(augop){if(!scope_has(scope,vn))die("Line %d: unknown variable '%s'",lineno,vn);char*rv=compile_expr(rhs,lineno);val=fmtdup("%s(%s,%s)",strcmp(augop,"+")==0?"nv_add":strcmp(augop,"-")==0?"nv_sub":strcmp(augop,"*")==0?"nv_mul":"nv_div",vn,rv);free(rv);}else val=compile_expr(rhs,lineno);
     emit_indent(out,indent);
-    if(!scope_has(scope,vn)){fprintf(out,"NvVal %s = %s;\n",vn,val);scope_add(scope,vn);}else fprintf(out,"%s = %s;\n",vn,val);
-    if(type){emit_indent(out,indent);fprintf(out,"nv_expect_type(%s, \"%s\", \"%s\");\n",vn,type,vn);}free(val);
+    if(!scope_has(scope,vn)){
+        fprintf(
+            out,
+            "NvVal %s = %s;\n",
+            vn,
+            val
+        );
+
+        scope_add_typed(
+            scope,
+            vn,
+            type
+        );
+    }else{
+        fprintf(
+            out,
+            "%s = %s;\n",
+            vn,
+            val
+        );
+    }
+    if(type && !type_checked_statically){
+        emit_indent(out,indent);
+        fprintf(
+            out,
+            "nv_expect_type(%s, \"%s\", \"%s\");\n",
+            vn,
+            type,
+            vn
+        );
+    }
+    free(val);
 }
 
 /* ============================
@@ -1092,6 +1413,8 @@ static void emit_dispatch(FILE*out){
     fprintf(out,"    if(self.kind==NV_MEMORY && strcmp(name,\"size\")==0){ if(argc!=0)nv_throw(\"memory.size() expects no arguments\"); return nv_memory_size(self); }\n");
     fprintf(out,"    if(self.kind==NV_MEMORY && strcmp(name,\"read\")==0){ if(argc!=1)nv_throw(\"memory.read() expects an index\"); return nv_memory_read(self,args[0]); }\n");
     fprintf(out,"    if(self.kind==NV_MEMORY && strcmp(name,\"write\")==0){ if(argc!=2)nv_throw(\"memory.write() expects an index and a byte\"); return nv_memory_write(self,args[0],args[1]); }\n");
+    fprintf(out,"    if(self.kind==NV_MEMORY && strcmp(name,\"fill\")==0){ if(argc==1)return nv_memory_fill_all(self,args[0]); if(argc==3)return nv_memory_fill_range(self,args[0],args[1],args[2]); nv_throw(\"memory.fill() expects value or value, offset, length\"); }\n");
+    fprintf(out,"    if(self.kind==NV_MEMORY && strcmp(name,\"copy_from\")==0){ if(argc==1)return nv_memory_copy_all(self,args[0]); if(argc==4)return nv_memory_copy_range(self,args[0],args[1],args[2],args[3]); nv_throw(\"memory.copy_from() expects source or source, source_offset, destination_offset, length\"); }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"read\")==0) return nv_file_read(self);\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"write\")==0){ if(argc<1)nv_throw(\"file.write() expects a value\"); return nv_file_write(self,args[0]); }\n");
     fprintf(out,"    if(self.kind==NV_FILE && strcmp(name,\"close\")==0){ nv_file_close(self); return nv_none(); }\n");

@@ -1,0 +1,4 @@
+manual source = alloc(32)
+manual destination = alloc(16)
+
+destination.copy_from(source)

@@ -1,0 +1,32 @@
+with memory source = alloc(16):
+    source.fill(65)
+
+    source.write(0, 10)
+    source.write(15, 99)
+
+    print("Source first:", source.read(0))
+    print("Source middle:", source.read(8))
+    print("Source last:", source.read(15))
+
+    with memory destination = alloc(32):
+        destination.fill(0)
+
+        destination.copy_from(source)
+
+        print("Copy first:", destination.read(0))
+        print("Copy middle:", destination.read(8))
+        print("Copy last:", destination.read(15))
+
+        destination.fill(7, 4, 4)
+
+        print("Range 3:", destination.read(3))
+        print("Range 4:", destination.read(4))
+        print("Range 7:", destination.read(7))
+        print("Range 8:", destination.read(8))
+
+        destination.copy_from(source, 4, 20, 8)
+
+        print("Copied range first:", destination.read(20))
+        print("Copied range last:", destination.read(27))
+
+print("Bulk memory OK")
