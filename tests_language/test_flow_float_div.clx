@@ -1,0 +1,6 @@
+a = 5.0
+b = a / 2
+
+a = "done"
+
+print(b)

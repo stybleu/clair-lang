@@ -1,0 +1,6 @@
+a = 1.5
+b = a + 2.5
+
+a = "hello"
+
+print(b)

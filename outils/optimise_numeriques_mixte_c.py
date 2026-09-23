@@ -207,6 +207,167 @@ def lower(expr, native_ints, dynamic_ints=None):
     return None
 
 
+
+def lower_flow_number(
+    expr,
+    native_ints,
+    native_floats,
+    dynamic_types=None,
+):
+    """
+    Abaisse une expression numérique dans un contexte où
+    certaines NvVal ont un type numérique connu localement.
+    """
+
+    expr = strip_outer(expr)
+
+    if expr in native_ints:
+        return expr, "int"
+
+    if expr in native_floats:
+        return expr, "double"
+
+    if dynamic_types and expr in dynamic_types:
+        typ = dynamic_types[expr]
+
+        if typ == "int":
+            return f"(long long)nv_num({expr})", "int"
+
+        if typ == "double":
+            return f"nv_num({expr})", "double"
+
+    if re.fullmatch(r'-?\d+(?:LL)?', expr):
+        return expr, "int"
+
+    if re.fullmatch(
+        r'-?(?:\d+\.\d*|\d*\.\d+|\d+[eE][+-]?\d+)'
+        r'(?:[eE][+-]?\d+)?',
+        expr
+    ):
+        return expr, "double"
+
+    inner = unwrap(expr, "nv_int")
+
+    if inner is not None:
+        lowered = lower_flow_number(
+            inner,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if lowered is not None and lowered[1] == "int":
+            return lowered
+
+        return None
+
+    inner = unwrap(expr, "nv_float")
+
+    if inner is not None:
+        lowered = lower_flow_number(
+            inner,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if lowered is not None:
+            return lowered[0], "double"
+
+        return None
+
+    inner = unwrap(expr, "nv_neg")
+
+    if inner is not None:
+        lowered = lower_flow_number(
+            inner,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if lowered is not None:
+            return f"-({lowered[0]})", lowered[1]
+
+        return None
+
+    operations = {
+        "nv_add": "+",
+        "nv_sub": "-",
+        "nv_mul": "*",
+    }
+
+    for fn, op in operations.items():
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        a = lower_flow_number(
+            args[0],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        b = lower_flow_number(
+            args[1],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if a is None or b is None:
+            return None
+
+        typ = (
+            "double"
+            if "double" in (a[1], b[1])
+            else "int"
+        )
+
+        return (
+            f"({a[0]} {op} {b[0]})",
+            typ,
+        )
+
+    inner = unwrap(expr, "nv_div")
+
+    if inner is not None:
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        a = lower_flow_number(
+            args[0],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        b = lower_flow_number(
+            args[1],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if a is None or b is None:
+            return None
+
+        return (
+            f"((double)({a[0]}) / (double)({b[0]}))",
+            "double",
+        )
+
+    return None
+
 def replace_balanced(line, function, callback):
     marker = function + "("
     pos = 0
@@ -331,6 +492,207 @@ def repair(lines):
                 native_strings.add(m.group(1))
 
     discover_native_types(lines)
+
+    # --------------------------------------------------------
+    # Spécialisation flow-sensitive numérique simple.
+    #
+    # Première étape pour les float :
+    # suivre les NvVal numériques dans le flux linéaire de
+    # main(), mais abandonner les faits dès qu'un bloc de
+    # contrôle est rencontré.
+    #
+    # Une variable réaffectée reste NvVal. En revanche, une
+    # nouvelle variable stable calculée à partir d'elle peut
+    # devenir un double C natif.
+    # --------------------------------------------------------
+
+    reassigned_names = set()
+
+    scan_in_main = False
+    scan_depth = 0
+
+    for source_line in lines:
+        if (
+            not scan_in_main
+            and re.match(
+                r'^\s*int\s+main\s*\(',
+                source_line,
+            )
+        ):
+            scan_in_main = True
+
+        if scan_in_main and scan_depth >= 1:
+            assignment = re.match(
+                r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.*?)\s*;\s*$',
+                source_line,
+            )
+
+            if assignment:
+                reassigned_names.add(
+                    assignment.group(1)
+                )
+
+        if scan_in_main:
+            scan_depth += (
+                source_line.count("{")
+                - source_line.count("}")
+            )
+
+            if scan_depth <= 0:
+                scan_in_main = False
+                scan_depth = 0
+
+    flow_numeric_types = {}
+    flow_float_specialized = []
+
+    numeric_output = []
+
+    flow_in_main = False
+    flow_depth = 0
+
+    for source_line in lines:
+        if (
+            not flow_in_main
+            and re.match(
+                r'^\s*int\s+main\s*\(',
+                source_line,
+            )
+        ):
+            flow_in_main = True
+
+        top_level_main = (
+            flow_in_main
+            and flow_depth == 1
+        )
+
+        stripped = source_line.strip()
+
+        if (
+            top_level_main
+            and re.match(
+                r'^(?:if|while|for|switch)\b',
+                stripped,
+            )
+        ):
+            # Première version volontairement conservatrice :
+            # aucun fait local ne traverse un bloc de contrôle.
+            flow_numeric_types.clear()
+
+        if top_level_main:
+            declaration = re.match(
+                r'^(\s*)NvVal\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.*?)\s*;\s*$',
+                source_line,
+            )
+
+            if declaration:
+                indent = declaration.group(1)
+                name = declaration.group(2)
+                rhs = declaration.group(3)
+
+                lowered = lower_flow_number(
+                    rhs,
+                    native_ints,
+                    native_floats,
+                    flow_numeric_types,
+                )
+
+                if name.startswith("__match"):
+                    lowered = None
+
+                if lowered is None:
+                    flow_numeric_types.pop(
+                        name,
+                        None,
+                    )
+
+                elif name in reassigned_names:
+                    # Le type est connu à cet instant,
+                    # mais la variable doit rester NvVal.
+                    flow_numeric_types[name] = (
+                        lowered[1]
+                    )
+
+                elif lowered[1] == "double":
+                    source_line = (
+                        f"{indent}double {name} = "
+                        f"{lowered[0]};\n"
+                    )
+
+                    native_floats.add(name)
+
+                    flow_numeric_types.pop(
+                        name,
+                        None,
+                    )
+
+                    flow_float_specialized.append(
+                        name
+                    )
+
+                else:
+                    # L'entier sera éventuellement spécialisé
+                    # par la passe entière existante.
+                    flow_numeric_types[name] = "int"
+
+            else:
+                assignment = re.match(
+                    r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.*?)\s*;\s*$',
+                    source_line,
+                )
+
+                if (
+                    assignment
+                    and assignment.group(1)
+                    in flow_numeric_types
+                ):
+                    name = assignment.group(1)
+                    rhs = assignment.group(2)
+
+                    lowered = lower_flow_number(
+                        rhs,
+                        native_ints,
+                        native_floats,
+                        flow_numeric_types,
+                    )
+
+                    if lowered is None:
+                        flow_numeric_types.pop(
+                            name,
+                            None,
+                        )
+                    else:
+                        flow_numeric_types[name] = (
+                            lowered[1]
+                        )
+
+        numeric_output.append(source_line)
+
+        if flow_in_main:
+            flow_depth += (
+                source_line.count("{")
+                - source_line.count("}")
+            )
+
+            if flow_depth <= 0:
+                flow_in_main = False
+                flow_depth = 0
+                flow_numeric_types.clear()
+
+    lines = numeric_output
+
+    if flow_float_specialized:
+        print(
+            "[Clariox OPT] Floats flow-sensitive :"
+        )
+
+        for name in sorted(
+            set(flow_float_specialized)
+        ):
+            print(f"  {name}")
 
     # --------------------------------------------------------
     # Détection des variables numériques instables.
