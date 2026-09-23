@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include <setjmp.h>
+#include <stdint.h>
 
 typedef struct NvVal NvVal;
 typedef struct NvList NvList;
@@ -23,7 +24,19 @@ struct NvDict { char **keys; NvVal *vals; int len, cap; };
 struct NvObj { char *type; NvDict *fields; };
 struct NvCall { NvVal *args; int argc, cap; NvDict *kw; };
 struct NvTryFrame { jmp_buf env; NvTryFrame *prev; NvMemoryScope *memory_scope; };
-struct NvMemory { unsigned char *data; size_t size; int freed; NvMemory *next; };
+typedef enum {
+    NV_MEM_BYTE,
+    NV_MEM_INT32,
+    NV_MEM_FLOAT64
+} NvMemoryType;
+struct NvMemory {
+    unsigned char *data;
+    size_t size;
+    size_t count;
+    NvMemoryType type;
+    int freed;
+    NvMemory *next;
+};
 struct NvMemoryScope { NvMemory *memory; NvMemoryScope *prev; };
 static NvMemory *nv_memory_head = NULL;
 static NvMemoryScope *nv_memory_scope_top = NULL;
@@ -89,21 +102,271 @@ static int nv_truth(NvVal v){ switch(v.kind){case NV_NONE:return 0;case NV_BOOL:
 static double nv_num(NvVal v){ if(v.kind==NV_INT)return(double)v.as.i; if(v.kind==NV_FLOAT)return v.as.f; if(v.kind==NV_BOOL)return(double)v.as.b; nv_throw("Expected a numeric value"); return 0;}
 static void nv_memory_shutdown(void){ nv_memory_scope_cleanup_to(NULL); NvMemory*m=nv_memory_head; size_t leaks=0,bytes=0; while(m){ NvMemory*next=m->next; if(!m->freed){leaks++;bytes+=m->size;} free(m); m=next; } nv_memory_head=NULL; if(leaks)fprintf(stderr,"Clariox memory warning: %zu manual allocation(s) not freed (%zu bytes)\n",leaks,bytes); }
 static NvMemory *nv_memory_get(NvVal v){ if(v.kind!=NV_MEMORY||!v.as.memory)nv_throw("Expected a memory block"); if(v.as.memory->freed)nv_throw("Memory block has already been freed"); return v.as.memory; }
-static NvVal nv_memory_alloc(NvVal sizev){ long long n=(long long)nv_num(sizev); if(n<=0)nv_throw("alloc() size must be greater than zero"); NvMemory*m=nv_xmalloc(sizeof(*m)); m->data=nv_xmalloc((size_t)n); memset(m->data,0,(size_t)n); m->size=(size_t)n; m->freed=0; m->next=nv_memory_head; nv_memory_head=m; if(!nv_memory_cleanup_registered){atexit(nv_memory_shutdown);nv_memory_cleanup_registered=1;} NvVal v=nv_none();v.kind=NV_MEMORY;v.as.memory=m;return v; }
-static NvVal nv_memory_free(NvVal v){ NvMemory*m=nv_memory_get(v); free(m->data); m->data=NULL; m->freed=1; return nv_none(); }
-static void nv_memory_free_scoped(NvVal v){ if(v.kind!=NV_MEMORY||!v.as.memory)return; NvMemory*m=v.as.memory; if(m->freed)return; free(m->data); m->data=NULL; m->freed=1; }
-static void nv_memory_scope_enter(NvVal v){ NvMemory*m=nv_memory_get(v); NvMemoryScope*s=nv_xmalloc(sizeof(*s)); s->memory=m; s->prev=nv_memory_scope_top; nv_memory_scope_top=s; }
-static void nv_memory_scope_leave(NvVal v){ if(v.kind!=NV_MEMORY||!v.as.memory)return; if(!nv_memory_scope_top||nv_memory_scope_top->memory!=v.as.memory)nv_throw("Internal scoped-memory stack mismatch"); NvMemoryScope*s=nv_memory_scope_top; nv_memory_scope_top=s->prev; nv_memory_free_scoped(v); free(s); }
-static void nv_memory_scope_cleanup_to(NvMemoryScope *target){ while(nv_memory_scope_top && nv_memory_scope_top!=target){ NvMemoryScope*s=nv_memory_scope_top; nv_memory_scope_top=s->prev; if(s->memory && !s->memory->freed){free(s->memory->data);s->memory->data=NULL;s->memory->freed=1;} free(s); } }
-static NvVal nv_memory_size(NvVal v){ NvMemory*m=nv_memory_get(v); return nv_int((long long)m->size); }
-static NvVal nv_memory_read(NvVal v,NvVal index){ NvMemory*m=nv_memory_get(v); long long i=(long long)nv_num(index); if(i<0||(unsigned long long)i>=(unsigned long long)m->size)nv_throw("Memory index out of range"); return nv_int((long long)m->data[i]); }
-static NvVal nv_memory_write(NvVal v,NvVal index,NvVal value){ NvMemory*m=nv_memory_get(v); long long i=(long long)nv_num(index); long long x=(long long)nv_num(value); if(i<0||(unsigned long long)i>=(unsigned long long)m->size)nv_throw("Memory index out of range"); if(x<0||x>255)nv_throw("Memory byte must be between 0 and 255"); m->data[i]=(unsigned char)x; return nv_none(); }
-static unsigned char nv_memory_byte(NvVal v){ long long x=(long long)nv_num(v); if(x<0||x>255)nv_throw("Memory byte must be between 0 and 255"); return (unsigned char)x; }
-static size_t nv_memory_offset(NvVal v){ long long x=(long long)nv_num(v); if(x<0)nv_throw("Memory offset must not be negative"); return (size_t)x; }
-static NvVal nv_memory_fill_all(NvVal v,NvVal value){ NvMemory*m=nv_memory_get(v); unsigned char x=nv_memory_byte(value); memset(m->data,x,m->size); return nv_none(); }
-static NvVal nv_memory_fill_range(NvVal v,NvVal value,NvVal offsetv,NvVal lengthv){ NvMemory*m=nv_memory_get(v); unsigned char x=nv_memory_byte(value); size_t offset=nv_memory_offset(offsetv); size_t length=nv_memory_offset(lengthv); if(offset>m->size||length>m->size-offset)nv_throw("Memory fill range out of bounds"); memset(m->data+offset,x,length); return nv_none(); }
-static NvVal nv_memory_copy_all(NvVal dstv,NvVal srcv){ NvMemory*dst=nv_memory_get(dstv); NvMemory*src=nv_memory_get(srcv); if(src->size>dst->size)nv_throw("Source memory block does not fit in destination"); memmove(dst->data,src->data,src->size); return nv_none(); }
-static NvVal nv_memory_copy_range(NvVal dstv,NvVal srcv,NvVal srcoffv,NvVal dstoffv,NvVal lengthv){ NvMemory*dst=nv_memory_get(dstv); NvMemory*src=nv_memory_get(srcv); size_t srcoff=nv_memory_offset(srcoffv); size_t dstoff=nv_memory_offset(dstoffv); size_t length=nv_memory_offset(lengthv); if(srcoff>src->size||length>src->size-srcoff)nv_throw("Source memory range out of bounds"); if(dstoff>dst->size||length>dst->size-dstoff)nv_throw("Destination memory range out of bounds"); memmove(dst->data+dstoff,src->data+srcoff,length); return nv_none(); }
+static const char *nv_memory_type_name(NvMemoryType type){
+    switch(type){
+        case NV_MEM_BYTE:return "byte";
+        case NV_MEM_INT32:return "int32";
+        case NV_MEM_FLOAT64:return "float64";
+    }
+    return "unknown";
+}
+static size_t nv_memory_type_size(NvMemoryType type){
+    switch(type){
+        case NV_MEM_BYTE:return 1;
+        case NV_MEM_INT32:return sizeof(int32_t);
+        case NV_MEM_FLOAT64:return sizeof(double);
+    }
+    return 1;
+}
+static size_t nv_memory_nonnegative_integer(NvVal v,const char *message){
+    if(v.kind==NV_INT){
+        if(v.as.i<0)nv_throw(message);
+        return (size_t)v.as.i;
+    }
+    if(v.kind==NV_FLOAT){
+        double x=v.as.f;
+        if(!isfinite(x)||x<0.0||floor(x)!=x||x>(double)SIZE_MAX)
+            nv_throw(message);
+        return (size_t)x;
+    }
+    nv_throw(message);
+    return 0;
+}
+static NvVal nv_memory_alloc_kind(NvVal countv,NvMemoryType type){
+    size_t count=nv_memory_nonnegative_integer(
+        countv,
+        "Memory allocation size must be a non-negative integer"
+    );
+    if(count==0)
+        nv_throw("alloc() size must be greater than zero");
+    size_t element_size=nv_memory_type_size(type);
+    if(count>SIZE_MAX/element_size)
+        nv_throw("Memory allocation is too large");
+    size_t bytes=count*element_size;
+    NvMemory*m=nv_xmalloc(sizeof(*m));
+    m->data=nv_xmalloc(bytes);
+    memset(m->data,0,bytes);
+    m->size=bytes;
+    m->count=count;
+    m->type=type;
+    m->freed=0;
+    m->next=nv_memory_head;
+    nv_memory_head=m;
+    if(!nv_memory_cleanup_registered){
+        atexit(nv_memory_shutdown);
+        nv_memory_cleanup_registered=1;
+    }
+    NvVal v=nv_none();
+    v.kind=NV_MEMORY;
+    v.as.memory=m;
+    return v;
+}
+static NvVal nv_memory_alloc(NvVal sizev){
+    return nv_memory_alloc_kind(sizev,NV_MEM_BYTE);
+}
+static NvVal nv_memory_alloc_int32(NvVal countv){
+    return nv_memory_alloc_kind(countv,NV_MEM_INT32);
+}
+static NvVal nv_memory_alloc_float64(NvVal countv){
+    return nv_memory_alloc_kind(countv,NV_MEM_FLOAT64);
+}
+static NvVal nv_memory_free(NvVal v){
+    NvMemory*m=nv_memory_get(v);
+    free(m->data);
+    m->data=NULL;
+    m->freed=1;
+    return nv_none();
+}
+static void nv_memory_free_scoped(NvVal v){
+    if(v.kind!=NV_MEMORY||!v.as.memory)return;
+    NvMemory*m=v.as.memory;
+    if(m->freed)return;
+    free(m->data);
+    m->data=NULL;
+    m->freed=1;
+}
+static void nv_memory_scope_enter(NvVal v){
+    NvMemory*m=nv_memory_get(v);
+    NvMemoryScope*s=nv_xmalloc(sizeof(*s));
+    s->memory=m;
+    s->prev=nv_memory_scope_top;
+    nv_memory_scope_top=s;
+}
+static void nv_memory_scope_leave(NvVal v){
+    if(v.kind!=NV_MEMORY||!v.as.memory)return;
+    if(!nv_memory_scope_top||nv_memory_scope_top->memory!=v.as.memory)
+        nv_throw("Internal scoped-memory stack mismatch");
+    NvMemoryScope*s=nv_memory_scope_top;
+    nv_memory_scope_top=s->prev;
+    nv_memory_free_scoped(v);
+    free(s);
+}
+static void nv_memory_scope_cleanup_to(NvMemoryScope *target){
+    while(nv_memory_scope_top && nv_memory_scope_top!=target){
+        NvMemoryScope*s=nv_memory_scope_top;
+        nv_memory_scope_top=s->prev;
+        if(s->memory && !s->memory->freed){
+            free(s->memory->data);
+            s->memory->data=NULL;
+            s->memory->freed=1;
+        }
+        free(s);
+    }
+}
+static NvVal nv_memory_size(NvVal v){
+    NvMemory*m=nv_memory_get(v);
+    return nv_int((long long)m->size);
+}
+static NvVal nv_memory_length(NvVal v){
+    NvMemory*m=nv_memory_get(v);
+    return nv_int((long long)m->count);
+}
+static NvVal nv_memory_type_value(NvVal v){
+    NvMemory*m=nv_memory_get(v);
+    return nv_str(nv_memory_type_name(m->type));
+}
+static NvVal nv_memory_read(NvVal v,NvVal index){
+    NvMemory*m=nv_memory_get(v);
+    size_t i=nv_memory_nonnegative_integer(
+        index,
+        "Memory index must be a non-negative integer"
+    );
+    if(i>=m->count)
+        nv_throw("Memory index out of range");
+    if(m->type==NV_MEM_BYTE)
+        return nv_int((long long)m->data[i]);
+    if(m->type==NV_MEM_INT32){
+        int32_t x;
+        memcpy(&x,m->data+i*sizeof(int32_t),sizeof(x));
+        return nv_int((long long)x);
+    }
+    if(m->type==NV_MEM_FLOAT64){
+        double x;
+        memcpy(&x,m->data+i*sizeof(double),sizeof(x));
+        return nv_float(x);
+    }
+    nv_throw("Unknown memory element type");
+    return nv_none();
+}
+static NvVal nv_memory_write(NvVal v,NvVal index,NvVal value){
+    NvMemory*m=nv_memory_get(v);
+    size_t i=nv_memory_nonnegative_integer(
+        index,
+        "Memory index must be a non-negative integer"
+    );
+    if(i>=m->count)
+        nv_throw("Memory index out of range");
+    if(m->type==NV_MEM_BYTE){
+        long long x=(long long)nv_num(value);
+        if(x<0||x>255)
+            nv_throw("Memory byte must be between 0 and 255");
+        m->data[i]=(unsigned char)x;
+        return nv_none();
+    }
+    if(m->type==NV_MEM_INT32){
+        if(value.kind!=NV_INT)
+            nv_throw("int32 memory requires an integer value");
+        if(value.as.i<INT32_MIN||value.as.i>INT32_MAX)
+            nv_throw("int32 memory value out of range");
+        int32_t x=(int32_t)value.as.i;
+        memcpy(m->data+i*sizeof(int32_t),&x,sizeof(x));
+        return nv_none();
+    }
+    if(m->type==NV_MEM_FLOAT64){
+        double x=nv_num(value);
+        memcpy(m->data+i*sizeof(double),&x,sizeof(x));
+        return nv_none();
+    }
+    nv_throw("Unknown memory element type");
+    return nv_none();
+}
+static void nv_memory_fill_native(NvMemory*m,NvVal value,size_t offset,size_t length){
+    if(offset>m->count||length>m->count-offset)
+        nv_throw("Memory fill range out of bounds");
+    if(m->type==NV_MEM_BYTE){
+        long long x=(long long)nv_num(value);
+        if(x<0||x>255)
+            nv_throw("Memory byte must be between 0 and 255");
+        memset(m->data+offset,(unsigned char)x,length);
+        return;
+    }
+    if(m->type==NV_MEM_INT32){
+        if(value.kind!=NV_INT)
+            nv_throw("int32 memory requires an integer value");
+        if(value.as.i<INT32_MIN||value.as.i>INT32_MAX)
+            nv_throw("int32 memory value out of range");
+        int32_t x=(int32_t)value.as.i;
+        for(size_t i=offset;i<offset+length;i++)
+            memcpy(m->data+i*sizeof(int32_t),&x,sizeof(x));
+        return;
+    }
+    if(m->type==NV_MEM_FLOAT64){
+        double x=nv_num(value);
+        for(size_t i=offset;i<offset+length;i++)
+            memcpy(m->data+i*sizeof(double),&x,sizeof(x));
+        return;
+    }
+    nv_throw("Unknown memory element type");
+}
+static NvVal nv_memory_fill_all(NvVal v,NvVal value){
+    NvMemory*m=nv_memory_get(v);
+    nv_memory_fill_native(m,value,0,m->count);
+    return nv_none();
+}
+static NvVal nv_memory_fill_range(NvVal v,NvVal value,NvVal offsetv,NvVal lengthv){
+    NvMemory*m=nv_memory_get(v);
+    size_t offset=nv_memory_nonnegative_integer(
+        offsetv,
+        "Memory offset must not be negative"
+    );
+    size_t length=nv_memory_nonnegative_integer(
+        lengthv,
+        "Memory length must not be negative"
+    );
+    nv_memory_fill_native(m,value,offset,length);
+    return nv_none();
+}
+static void nv_memory_require_same_type(NvMemory*dst,NvMemory*src){
+    if(dst->type!=src->type)
+        nv_throw("Memory copy requires matching element types");
+}
+static NvVal nv_memory_copy_all(NvVal dstv,NvVal srcv){
+    NvMemory*dst=nv_memory_get(dstv);
+    NvMemory*src=nv_memory_get(srcv);
+    nv_memory_require_same_type(dst,src);
+    if(src->count>dst->count)
+        nv_throw("Source memory block does not fit in destination");
+    memmove(dst->data,src->data,src->size);
+    return nv_none();
+}
+static NvVal nv_memory_copy_range(NvVal dstv,NvVal srcv,NvVal srcoffv,NvVal dstoffv,NvVal lengthv){
+    NvMemory*dst=nv_memory_get(dstv);
+    NvMemory*src=nv_memory_get(srcv);
+    nv_memory_require_same_type(dst,src);
+    size_t srcoff=nv_memory_nonnegative_integer(
+        srcoffv,
+        "Memory offset must not be negative"
+    );
+    size_t dstoff=nv_memory_nonnegative_integer(
+        dstoffv,
+        "Memory offset must not be negative"
+    );
+    size_t length=nv_memory_nonnegative_integer(
+        lengthv,
+        "Memory length must not be negative"
+    );
+    if(srcoff>src->count||length>src->count-srcoff)
+        nv_throw("Source memory range out of bounds");
+    if(dstoff>dst->count||length>dst->count-dstoff)
+        nv_throw("Destination memory range out of bounds");
+    size_t element_size=nv_memory_type_size(dst->type);
+    memmove(
+        dst->data+dstoff*element_size,
+        src->data+srcoff*element_size,
+        length*element_size
+    );
+    return nv_none();
+}
 static NvVal nv_add(NvVal a,NvVal b){ if(a.kind==NV_STR&&b.kind==NV_STR){size_t n=strlen(a.as.s)+strlen(b.as.s)+1;char*p=nv_xmalloc(n);snprintf(p,n,"%s%s",a.as.s,b.as.s);NvVal v=nv_str(p);free(p);return v;} if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i+b.as.i); return nv_float(nv_num(a)+nv_num(b));}
 static NvVal nv_sub(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i-b.as.i); return nv_float(nv_num(a)-nv_num(b));}
 static NvVal nv_mul(NvVal a,NvVal b){ if(a.kind==NV_INT&&b.kind==NV_INT)return nv_int(a.as.i*b.as.i); return nv_float(nv_num(a)*nv_num(b));}

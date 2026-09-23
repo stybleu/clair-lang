@@ -1,0 +1,3 @@
+manual values = alloc[int32](2)
+
+values.write(0, -2147483649)

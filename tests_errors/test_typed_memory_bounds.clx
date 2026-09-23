@@ -1,0 +1,3 @@
+manual values = alloc[int32](4)
+
+values.write(4, 42)

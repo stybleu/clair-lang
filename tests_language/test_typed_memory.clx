@@ -1,0 +1,48 @@
+print("=== INT32 ===")
+
+manual numbers = alloc[int32](4)
+
+print("Type:", numbers.type())
+print("Length:", numbers.length())
+print("Bytes:", numbers.size())
+
+numbers.write(0, -2000000000)
+numbers.write(1, 42)
+numbers.fill(7, 2, 2)
+
+print("I0:", numbers.read(0))
+print("I1:", numbers.read(1))
+print("I2:", numbers.read(2))
+print("I3:", numbers.read(3))
+
+free(numbers)
+
+
+print("=== FLOAT64 ===")
+
+with memory values = alloc[float64](3):
+    print("Type:", values.type())
+    print("Length:", values.length())
+    print("Bytes:", values.size())
+
+    values.write(0, 1.5)
+    values.write(1, -2.25)
+    values.fill(3.5, 2, 1)
+
+    print("F0:", values.read(0))
+    print("F1:", values.read(1))
+    print("F2:", values.read(2))
+
+
+print("=== BYTE COMPATIBILITY ===")
+
+with memory bytes = alloc[byte](4):
+    bytes.fill(65)
+
+    print("Type:", bytes.type())
+    print("Length:", bytes.length())
+    print("Bytes:", bytes.size())
+    print("Byte:", bytes.read(3))
+
+
+print("Typed memory OK")

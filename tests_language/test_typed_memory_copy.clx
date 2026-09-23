@@ -1,0 +1,39 @@
+print("=== INT32 COPY ===")
+
+with memory source = alloc[int32](4):
+    source.write(0, 10)
+    source.write(1, 20)
+    source.write(2, 30)
+    source.write(3, 40)
+
+    with memory destination = alloc[int32](6):
+        destination.fill(0)
+        destination.copy_from(source)
+
+        print("All:", destination.read(0), destination.read(1), destination.read(2), destination.read(3))
+
+        destination.fill(-1)
+        destination.copy_from(source, 1, 2, 2)
+
+        print("Range:", destination.read(0), destination.read(1), destination.read(2), destination.read(3), destination.read(4))
+
+
+print("=== FLOAT64 COPY ===")
+
+with memory source = alloc[float64](3):
+    source.write(0, 1.25)
+    source.write(1, 2.5)
+    source.write(2, 5.0)
+
+    with memory destination = alloc[float64](3):
+        destination.copy_from(source)
+
+        print(
+            "Floats:",
+            destination.read(0),
+            destination.read(1),
+            destination.read(2)
+        )
+
+
+print("Typed copy OK")

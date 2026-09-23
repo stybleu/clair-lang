@@ -1,0 +1,4 @@
+manual integers = alloc[int32](4)
+manual decimals = alloc[float64](4)
+
+decimals.copy_from(integers)
