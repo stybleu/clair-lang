@@ -546,6 +546,7 @@ def repair(lines):
     flow_numeric_types = {}
     flow_float_specialized = []
     flow_float_loop_rewritten = []
+    flow_float_loop_unboxed = []
 
     numeric_output = []
 
@@ -831,11 +832,118 @@ def repair(lines):
 
         return loop_end, candidates
 
+    def choose_float_while_unbox(
+        start_index,
+        loop_end,
+        invariants,
+        loop_id,
+    ):
+        """
+        Sélection conservatrice pour le déballage local.
+
+        Tous les float invariants de la boucle sont traités
+        ensemble.
+
+        On abandonne complètement l'unboxing si l'un d'eux :
+
+        - apparaît dans la condition du while ;
+        - apparaît dans print/appel/autre instruction ;
+        - apparaît dans une affectation non numérique ;
+        - est utilisé par une affectation dont la cible n'est
+          pas elle-même un float invariant.
+
+        Dans ce cas l'optimisation précédente reste active.
+        """
+
+        names = {
+            name
+            for name, typ in invariants.items()
+            if typ == "double"
+        }
+
+        if not names:
+            return {}
+
+        header = lines[start_index]
+
+        # La condition du while lit encore les NvVal originaux.
+        # Si elle dépend d'un candidat, on ne peut pas laisser
+        # sa copie NvVal devenir obsolète pendant la boucle.
+        for name in names:
+            if re.search(
+                rf'\b{re.escape(name)}\b',
+                header,
+            ):
+                return {}
+
+        index = start_index + 1
+
+        while index <= loop_end:
+            current = lines[index]
+
+            mentioned = {
+                name
+                for name in names
+                if re.search(
+                    rf'\b{re.escape(name)}\b',
+                    current,
+                )
+            }
+
+            if mentioned:
+                assignment = re.match(
+                    r'^\s*'
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.*?)\s*;\s*$',
+                    current,
+                )
+
+                # print(a), appel(a), condition sur a, etc.
+                if not assignment:
+                    return {}
+
+                target = assignment.group(1)
+                rhs = assignment.group(2)
+
+                # Pour cette première version, une valeur
+                # déballée ne peut alimenter que les autres
+                # valeurs déballées de la même boucle.
+                if target not in names:
+                    return {}
+
+                lowered = lower_flow_number(
+                    rhs,
+                    native_ints,
+                    native_floats,
+                    invariants,
+                )
+
+                if (
+                    lowered is None
+                    or lowered[1] != "double"
+                ):
+                    return {}
+
+            index += 1
+
+        result = {}
+
+        for name in sorted(names):
+            result[name] = (
+                f"__clariox_loop_float_"
+                f"{loop_id}_{name}"
+            )
+
+        return result
+
     pending_if_end = None
     pending_if_types = None
 
     pending_while_end = None
     pending_while_types = None
+
+    active_while_unbox = {}
+    while_unbox_counter = 0
 
     for flow_line_index, source_line in enumerate(lines):
         if (
@@ -906,16 +1014,50 @@ def repair(lines):
                         loop_lowered is not None
                         and loop_lowered[1] == "double"
                     ):
-                        source_line = (
-                            f"{loop_indent}{loop_name} = "
-                            f"nv_float({loop_lowered[0]});\n"
-                        )
+                        if (
+                            active_while_unbox
+                            and loop_name
+                            in active_while_unbox
+                        ):
+                            native_expr = loop_lowered[0]
+
+                            # lower_flow_number() représente un
+                            # NvVal double connu par nv_num(x).
+                            # Dans cette boucle, remplacer cette
+                            # lecture par le vrai double local.
+                            for (
+                                original_name,
+                                native_name,
+                            ) in active_while_unbox.items():
+                                native_expr = re.sub(
+                                    rf'nv_num\(\s*'
+                                    rf'{re.escape(original_name)}'
+                                    rf'\s*\)',
+                                    native_name,
+                                    native_expr,
+                                )
+
+                            source_line = (
+                                f"{loop_indent}"
+                                f"{active_while_unbox[loop_name]}"
+                                f" = {native_expr};\n"
+                            )
+
+                            flow_float_loop_unboxed.append(
+                                loop_name
+                            )
+
+                        else:
+                            source_line = (
+                                f"{loop_indent}{loop_name} = "
+                                f"nv_float({loop_lowered[0]});\n"
+                            )
+
+                            flow_float_loop_rewritten.append(
+                                loop_name
+                            )
 
                         stripped = source_line.strip()
-
-                        flow_float_loop_rewritten.append(
-                            loop_name
-                        )
 
         if (
             top_level_main
@@ -950,6 +1092,36 @@ def repair(lines):
                 flow_line_index,
                 flow_numeric_types,
             )
+
+            active_while_unbox = {}
+
+            if pending_while_types:
+                while_unbox_counter += 1
+
+                active_while_unbox = (
+                    choose_float_while_unbox(
+                        flow_line_index,
+                        pending_while_end,
+                        pending_while_types,
+                        while_unbox_counter,
+                    )
+                )
+
+            if active_while_unbox:
+                while_indent = re.match(
+                    r'^(\s*)',
+                    source_line,
+                ).group(1)
+
+                for (
+                    original_name,
+                    native_name,
+                ) in active_while_unbox.items():
+                    numeric_output.append(
+                        f"{while_indent}"
+                        f"double {native_name} = "
+                        f"nv_num({original_name});\n"
+                    )
 
             # Les faits ne seront restaurés qu'à la sortie de
             # la boucle, après validation à point fixe.
@@ -1084,12 +1256,29 @@ def repair(lines):
                 pending_while_end is not None
                 and flow_line_index == pending_while_end
             ):
+                if active_while_unbox:
+                    exit_indent = re.match(
+                        r'^(\s*)',
+                        source_line,
+                    ).group(1)
+
+                    for (
+                        original_name,
+                        native_name,
+                    ) in active_while_unbox.items():
+                        numeric_output.append(
+                            f"{exit_indent}"
+                            f"{original_name} = "
+                            f"nv_float({native_name});\n"
+                        )
+
                 flow_numeric_types = dict(
                     pending_while_types or {}
                 )
 
                 pending_while_end = None
                 pending_while_types = None
+                active_while_unbox = {}
 
             if flow_depth <= 0:
                 flow_in_main = False
@@ -1101,6 +1290,8 @@ def repair(lines):
 
                 pending_while_end = None
                 pending_while_types = None
+
+                active_while_unbox = {}
 
     lines = numeric_output
 
@@ -1121,6 +1312,16 @@ def repair(lines):
 
         for name in sorted(
             set(flow_float_loop_rewritten)
+        ):
+            print(f"  {name}")
+
+    if flow_float_loop_unboxed:
+        print(
+            "[Clariox OPT] Float loop-local unboxing :"
+        )
+
+        for name in sorted(
+            set(flow_float_loop_unboxed)
         ):
             print(f"  {name}")
 
