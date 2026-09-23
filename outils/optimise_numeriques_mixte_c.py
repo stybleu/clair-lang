@@ -560,6 +560,21 @@ def repair(lines):
                 ) is not None
             )
 
+            # Boucle while directement dans main().
+            #
+            # Tant que l'analyse à point fixe des boucles
+            # n'est pas appliquée, un while constitue une
+            # barrière de flot : les faits connus avant la
+            # boucle peuvent être utilisés pour sa condition,
+            # mais ne doivent pas être supposés vrais après.
+            entering_while = (
+                top_level_main
+                and re.match(
+                    r'^while\s*\(',
+                    stripped
+                ) is not None
+            )
+
             # --------------------------------------------
             # NvVal x = expression;
             # --------------------------------------------
@@ -709,6 +724,16 @@ def repair(lines):
 
                     # L'état principal sera restauré par
                     # merge_chain() à la fin de la chaîne.
+                    flow_dynamic_ints.clear()
+
+                # Boucle while non encore analysée à
+                # point fixe : ne propager aucun fait de type
+                # dynamique au-delà de sa frontière.
+                elif (
+                    entering_while
+                    and old_depth == 1
+                    and main_depth == 2
+                ):
                     flow_dynamic_ints.clear()
 
                 # Nouvelle branche else / else if.

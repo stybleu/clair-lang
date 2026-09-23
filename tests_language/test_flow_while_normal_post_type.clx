@@ -1,0 +1,10 @@
+i = 0
+a = 0
+
+while i < 1:
+    i = i + 1
+    a = "done"
+
+b = a
+
+print(b)

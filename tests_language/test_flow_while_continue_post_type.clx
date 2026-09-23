@@ -1,0 +1,11 @@
+i = 0
+a = 0
+
+while i < 1:
+    i = i + 1
+    a = "skip"
+    continue
+
+b = a
+
+print(b)

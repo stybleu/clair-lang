@@ -1,0 +1,9 @@
+a = 0
+
+while a < 1:
+    a = "stop"
+    break
+
+b = a
+
+print(b)
