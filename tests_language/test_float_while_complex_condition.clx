@@ -1,0 +1,12 @@
+a = 0.0
+b = 2.0
+limit = 20.0
+
+while a * 2.0 + b < limit:
+    a = a + 1.0
+
+result = a
+
+a = "done"
+
+print(result)

@@ -379,8 +379,13 @@ def lower_flow_condition(
     Abaisse une condition numérique Clariox vers une
     expression booléenne C native.
 
-    Première version volontairement conservatrice :
-    comparaisons numériques uniquement.
+    Version conservatrice :
+    - comparaisons numériques ;
+    - and / or entre conditions numériques ;
+    - not sur une condition numérique.
+
+    Toute expression inconnue provoque un abandon de
+    l'abaissement natif.
     """
 
     expr = strip_outer(expr)
@@ -393,6 +398,69 @@ def lower_flow_condition(
             native_ints,
             native_floats,
             dynamic_types,
+        )
+
+    # --------------------------------------------------------
+    # Opérateurs logiques.
+    #
+    # Ils ne sont abaissés que si CHAQUE opérande est lui-même
+    # une condition numérique entièrement comprise.
+    # --------------------------------------------------------
+
+    logical = {
+        "nv_and": "&&",
+        "nv_or": "||",
+    }
+
+    for fn, op in logical.items():
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_flow_condition(
+            args[0],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        right = lower_flow_condition(
+            args[1],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if left is None or right is None:
+            return None
+
+        return (
+            f"(({strip_outer(left)}) "
+            f"{op} "
+            f"({strip_outer(right)}))"
+        )
+
+    inner = unwrap(expr, "nv_not")
+
+    if inner is not None:
+        lowered = lower_flow_condition(
+            inner,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if lowered is None:
+            return None
+
+        return (
+            f"!({strip_outer(lowered)})"
         )
 
     comparisons = {
@@ -514,14 +582,27 @@ def simplify_control_condition(line):
     condition = strip_outer(condition)
 
     # Parenthèses autour d'un simple identifiant.
+    #
+    # Important : ne jamais modifier les arguments d'un
+    # appel de fonction.
+    #
+    #     (a)        -> a
+    #     nv_not(a)  -> nv_not(a)
+    #
     condition = re.sub(
+        r'(?<![A-Za-z0-9_])'
         r'\(([A-Za-z_][A-Za-z0-9_]*)\)',
         r'\1',
         condition
     )
 
-    # Parenthèses autour d'un entier C simple.
+    # Même protection pour les constantes entières :
+    #
+    #     (2LL)        -> 2LL
+    #     nv_int(2LL)  -> nv_int(2LL)
+    #
     condition = re.sub(
+        r'(?<![A-Za-z0-9_])'
         r'\((-?\d+(?:LL)?)\)',
         r'\1',
         condition
@@ -2627,6 +2708,94 @@ def repair(lines):
             "nv_call_add",
             call_add_callback
         )
+
+        # ----------------------------------------------------
+        # Comparaisons et opérateurs logiques du runtime.
+        #
+        # Ils attendent eux aussi des NvVal.
+        #
+        # Ceci est notamment indispensable lorsqu'une variable
+        # a été spécialisée en double/int natif mais qu'une
+        # condition complète doit rester dynamique.
+        # ----------------------------------------------------
+
+        for predicate_fn in (
+            "nv_eq",
+            "nv_ne",
+            "nv_lt",
+            "nv_le",
+            "nv_gt",
+            "nv_ge",
+            "nv_and",
+            "nv_or",
+        ):
+            def predicate_binary_callback(
+                inner,
+                fn=predicate_fn,
+            ):
+                args = split_args(inner)
+
+                if len(args) != 2:
+                    return None
+
+                changed = False
+
+                for index in (0, 1):
+                    boxed = box_native(
+                        args[index]
+                    )
+
+                    if boxed is not None:
+                        args[index] = boxed
+                        changed = True
+
+                if not changed:
+                    return None
+
+                return (
+                    f"{fn}("
+                    f"{args[0]}, "
+                    f"{args[1]}"
+                    f")"
+                )
+
+            line = replace_balanced(
+                line,
+                predicate_fn,
+                predicate_binary_callback
+            )
+
+        # nv_not(...) et nv_truth(...) possèdent un seul
+        # opérande NvVal.
+        for predicate_fn in (
+            "nv_not",
+            "nv_truth",
+        ):
+            def predicate_unary_callback(
+                inner,
+                fn=predicate_fn,
+            ):
+                args = split_args(inner)
+
+                if len(args) != 1:
+                    return None
+
+                boxed = box_native(
+                    args[0]
+                )
+
+                if boxed is None:
+                    return None
+
+                return (
+                    f"{fn}({boxed})"
+                )
+
+            line = replace_balanced(
+                line,
+                predicate_fn,
+                predicate_unary_callback
+            )
 
         # Les opérations arithmétiques du runtime travaillent
         # exclusivement avec des NvVal. Boxer les opérandes
