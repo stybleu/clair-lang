@@ -13,6 +13,85 @@ def indentation(line):
     return len(line) - len(line.lstrip(" "))
 
 
+def rewrite_outer_continues(
+    lines,
+    outer_indent,
+    index_name,
+    step_name,
+):
+    """
+    Insère l'incrément de range juste avant un continue
+    qui cible la boucle range actuellement transformée.
+
+    Les continue appartenant à une boucle imbriquée ne sont
+    pas modifiés ici : la transformation récursive de cette
+    boucle s'en chargera elle-même.
+    """
+
+    output = []
+
+    # La boucle range extérieure est considérée comme active.
+    block_stack = [
+        (outer_indent, "loop")
+    ]
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not stripped:
+            output.append(line)
+            continue
+
+        indent = indentation(line)
+
+        # Fermer les blocs dont on vient de sortir.
+        while (
+            len(block_stack) > 1
+            and block_stack[-1][0] >= indent
+        ):
+            block_stack.pop()
+
+        if stripped == "continue":
+            nearest_loop = None
+
+            for block_indent, kind in reversed(block_stack):
+                if kind == "loop":
+                    nearest_loop = block_indent
+                    break
+
+            # Le continue vise la boucle range extérieure.
+            if nearest_loop == outer_indent:
+                spaces = line[
+                    :len(line) - len(line.lstrip(" "))
+                ]
+
+                output.append(
+                    f"{spaces}{index_name} = "
+                    f"{index_name} + {step_name}\n"
+                )
+
+            output.append(line)
+            continue
+
+        output.append(line)
+
+        # Suivre les blocs Clariox indentés.
+        if stripped.endswith(":"):
+            if re.match(
+                r'^(for|while)\b',
+                stripped
+            ):
+                kind = "loop"
+            else:
+                kind = "block"
+
+            block_stack.append(
+                (indent, kind)
+            )
+
+    return output
+
+
 def split_args(text):
     args = []
     current = []
@@ -127,16 +206,6 @@ def transform(lines):
             i = j
             continue
 
-        # Pour l'instant on ne réécrit pas une boucle contenant continue.
-        if any(
-            re.match(r'^\s*(continue|continue)\b', x)
-            for x in body
-        ):
-            output.append(line)
-            output.extend(transform(body))
-            i = j
-            continue
-
         if len(args) == 1:
             start = "0"
             stop = args[0]
@@ -180,6 +249,13 @@ def transform(lines):
 
         output.append(f"{spaces}while {condition}:\n")
         output.append(f"{body_indent}{variable} = {index_name}\n")
+
+        body = rewrite_outer_continues(
+            body,
+            base_indent,
+            index_name,
+            step_name,
+        )
 
         transformed_body = transform(body)
         output.extend(transformed_body)
