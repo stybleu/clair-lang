@@ -1293,7 +1293,214 @@ def repair(lines):
 
                 active_while_unbox = {}
 
+    # --------------------------------------------------------
+    # Peephole : supprimer un réemballage float immédiatement
+    # rendu inutile après une boucle unboxée.
+    #
+    # Motif :
+    #
+    #     a = nv_float(__clariox_loop_float_1_a);
+    #     double result = nv_num(a);
+    #     a = autre_valeur;
+    #
+    # devient :
+    #
+    #     double result = __clariox_loop_float_1_a;
+    #     a = autre_valeur;
+    #
+    # On ne traverse aucun bloc de contrôle et aucun usage
+    # dynamique de a.
+    # --------------------------------------------------------
+
+    def eliminate_dead_float_reboxes(source_lines):
+        optimized = list(source_lines)
+        eliminated = []
+
+        rebox_pattern = re.compile(
+            r'^\s*'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*nv_float\('
+            r'(__clariox_loop_float_'
+            r'\d+_[A-Za-z_][A-Za-z0-9_]*)'
+            r'\)\s*;\s*$'
+        )
+
+        index = 0
+
+        while index < len(optimized):
+            match = rebox_pattern.match(
+                optimized[index]
+            )
+
+            if not match:
+                index += 1
+                continue
+
+            original_name = match.group(1)
+            native_name = match.group(2)
+
+            scan = index + 1
+
+            replacements = []
+            native_reads = 0
+            overwrite_found = False
+            safe = True
+
+            while scan < len(optimized):
+                current = optimized[scan]
+                stripped = current.strip()
+
+                if not stripped:
+                    scan += 1
+                    continue
+
+                # Ne jamais transporter le temporaire à travers
+                # une structure de contrôle.
+                if (
+                    stripped == "}"
+                    or re.match(
+                        r'^(?:if|while|for|switch|else)\b',
+                        stripped,
+                    )
+                    or stripped.startswith("return ")
+                ):
+                    safe = False
+                    break
+
+                # Nouvelle affectation de la NvVal originale :
+                # sa valeur précédente devient morte.
+                overwrite = re.match(
+                    rf'^(\s*)'
+                    rf'{re.escape(original_name)}'
+                    rf'\s*=\s*(.*?)\s*;\s*$',
+                    current,
+                )
+
+                if overwrite:
+                    rhs = overwrite.group(2)
+
+                    # a = expression utilisant encore a
+                    # nécessite l'ancien NvVal.
+                    if re.search(
+                        rf'\b{re.escape(original_name)}\b',
+                        rhs,
+                    ):
+                        safe = False
+                        break
+
+                    overwrite_found = True
+                    break
+
+                # Autoriser uniquement une lecture numérique
+                # dans une déclaration double.
+                declaration = re.match(
+                    r'^(\s*)double\s+'
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.*?)\s*;\s*$',
+                    current,
+                )
+
+                if declaration:
+                    indent = declaration.group(1)
+                    target = declaration.group(2)
+                    rhs = declaration.group(3)
+
+                    contains_original = (
+                        re.search(
+                            rf'\b'
+                            rf'{re.escape(original_name)}'
+                            rf'\b',
+                            rhs,
+                        )
+                        is not None
+                    )
+
+                    if contains_original:
+                        converted_rhs, count = re.subn(
+                            rf'nv_num\(\s*'
+                            rf'{re.escape(original_name)}'
+                            rf'\s*\)',
+                            native_name,
+                            rhs,
+                        )
+
+                        # Le nom apparaît, mais pas exclusivement
+                        # sous la forme nv_num(a).
+                        if (
+                            count == 0
+                            or re.search(
+                                rf'\b'
+                                rf'{re.escape(original_name)}'
+                                rf'\b',
+                                converted_rhs,
+                            )
+                        ):
+                            safe = False
+                            break
+
+                        replacements.append(
+                            (
+                                scan,
+                                f"{indent}double {target} = "
+                                f"{converted_rhs};\n",
+                            )
+                        )
+
+                        native_reads += count
+
+                    scan += 1
+                    continue
+
+                # Toute autre utilisation de a nécessite que le
+                # NvVal réemballé existe réellement.
+                if re.search(
+                    rf'\b{re.escape(original_name)}\b',
+                    current,
+                ):
+                    safe = False
+                    break
+
+                # Instruction indépendante de a :
+                # elle peut rester telle quelle.
+                scan += 1
+
+            if (
+                safe
+                and overwrite_found
+                and native_reads > 0
+            ):
+                optimized[index] = ""
+
+                for (
+                    line_index,
+                    replacement,
+                ) in replacements:
+                    optimized[line_index] = replacement
+
+                eliminated.append(original_name)
+
+            index += 1
+
+        return optimized, eliminated
+
+    (
+        numeric_output,
+        flow_float_rebox_eliminated,
+    ) = eliminate_dead_float_reboxes(
+        numeric_output
+    )
+
     lines = numeric_output
+
+    if flow_float_rebox_eliminated:
+        print(
+            "[Clariox OPT] Réemballages float éliminés :"
+        )
+
+        for name in sorted(
+            set(flow_float_rebox_eliminated)
+        ):
+            print(f"  {name}")
 
     if flow_float_specialized:
         print(
