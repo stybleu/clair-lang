@@ -254,6 +254,51 @@ def replace_balanced(line, function, callback):
     return line
 
 
+
+def simplify_control_condition(line):
+    """
+    Simplifie uniquement les conditions C de if/while.
+
+    Exemples :
+        while (((a < b))) {
+    devient :
+        while (a < b) {
+
+        if ((i) == (2LL)) {
+    devient :
+        if (i == 2LL) {
+    """
+
+    m = re.match(
+        r'^(\s*)(if|while)\s*\((.*)\)\s*\{\s*$',
+        line.rstrip("\n")
+    )
+
+    if not m:
+        return line
+
+    indent, keyword, condition = m.groups()
+
+    condition = strip_outer(condition)
+
+    # Parenthèses autour d'un simple identifiant.
+    condition = re.sub(
+        r'\(([A-Za-z_][A-Za-z0-9_]*)\)',
+        r'\1',
+        condition
+    )
+
+    # Parenthèses autour d'un entier C simple.
+    condition = re.sub(
+        r'\((-?\d+(?:LL)?)\)',
+        r'\1',
+        condition
+    )
+
+    return f"{indent}{keyword} ({condition}) {{\n"
+
+
+
 def repair(lines):
     native_ints = set()
     native_floats = set()
@@ -817,6 +862,10 @@ def repair(lines):
                 line,
                 "nv_truth",
                 truth_callback
+            )
+
+            new_line = simplify_control_condition(
+                new_line
             )
 
             if new_line != line:
