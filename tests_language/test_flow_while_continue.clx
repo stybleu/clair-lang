@@ -1,0 +1,14 @@
+i = 0
+a = 10
+
+while i < 3:
+    i = i + 1
+
+    if i == 1:
+        a = "skip"
+        continue
+
+    a = 20
+
+print(i)
+print(a)
