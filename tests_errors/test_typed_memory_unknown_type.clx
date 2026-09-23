@@ -1,1 +1,1 @@
-manual values = alloc[int16](4)
+manual values = alloc[int24](4)

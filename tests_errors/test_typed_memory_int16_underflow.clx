@@ -1,0 +1,2 @@
+manual value = alloc[int16](1)
+value.write(0, -32769)

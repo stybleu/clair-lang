@@ -1,0 +1,2 @@
+manual value = alloc[uint16](1)
+value.write(0, 65536)

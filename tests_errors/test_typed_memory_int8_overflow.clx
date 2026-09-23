@@ -1,0 +1,2 @@
+manual value = alloc[int8](1)
+value.write(0, 128)

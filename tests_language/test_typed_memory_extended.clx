@@ -1,0 +1,46 @@
+with memory a = alloc[int8](2):
+    a.write(0, -128)
+    a.write(1, 127)
+    print("int8:", a.type(), a.size(), a.read(0), a.read(1))
+
+with memory a = alloc[uint8](2):
+    a.write(0, 0)
+    a.write(1, 255)
+    print("uint8:", a.type(), a.size(), a.read(0), a.read(1))
+
+with memory a = alloc[int16](2):
+    a.write(0, -32768)
+    a.write(1, 32767)
+    print("int16:", a.type(), a.size(), a.read(0), a.read(1))
+
+with memory a = alloc[uint16](2):
+    a.write(0, 0)
+    a.write(1, 65535)
+    print("uint16:", a.type(), a.size(), a.read(0), a.read(1))
+
+with memory a = alloc[int32](2):
+    a.write(0, -2147483648)
+    a.write(1, 2147483647)
+    print("int32:", a.type(), a.size(), a.read(0), a.read(1))
+
+with memory a = alloc[uint32](2):
+    a.write(0, 0)
+    a.write(1, 4294967295)
+    print("uint32:", a.type(), a.size(), a.read(0), a.read(1))
+
+with memory a = alloc[int64](2):
+    a.write(0, -9223372036854775807)
+    a.write(1, 9223372036854775807)
+    print("int64:", a.type(), a.size(), a.read(0), a.read(1))
+
+with memory a = alloc[float32](2):
+    a.write(0, 1.25)
+    a.write(1, -2.5)
+    print("float32:", a.type(), a.size(), a.read(0), a.read(1))
+
+with memory a = alloc[float64](2):
+    a.write(0, 3.141592653589793)
+    a.write(1, -10.5)
+    print("float64:", a.type(), a.size(), a.read(0), a.read(1))
+
+print("Extended typed memory OK")
