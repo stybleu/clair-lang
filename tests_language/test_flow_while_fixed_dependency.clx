@@ -1,0 +1,15 @@
+i = 0
+a = 1
+b = a + 1
+
+while i < 2:
+    i = i + 1
+    a = b + 1
+    b = a + 1
+
+c = b + 1
+
+a = "done"
+b = "done"
+
+print(c)

@@ -344,42 +344,64 @@ def repair(lines):
 
     unsafe_ints = set()
 
-    for line in lines:
-        # Affectation simple, sans déclaration.
-        #
-        # Ne correspond pas à :
-        #     NvVal x = ...
-        #     long long x = ...
-        #
-        # mais correspond à :
-        #     x = ...
-        m = re.match(
-            r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
-            r'\s*=\s*(.*?)\s*;\s*$',
-            line
+    # La propagation des variables instables doit elle aussi
+    # atteindre un point fixe.
+    #
+    # Exemple :
+    #
+    #     a = 1
+    #     b = a
+    #
+    #     a = "bad"
+    #     b = a
+    #
+    # Le premier passage découvre que a est instable.
+    # Le passage suivant doit alors découvrir que b dépend
+    # d'une valeur qui n'est plus garantie entière.
+    unsafe_changed = True
+
+    while unsafe_changed:
+        unsafe_changed = False
+
+        safe_candidates = (
+            set(candidate_ints)
+            - set(unsafe_ints)
         )
 
-        if not m:
-            continue
+        for line in lines:
+            # Affectation simple, sans déclaration.
+            m = re.match(
+                r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.*?)\s*;\s*$',
+                line
+            )
 
-        name = m.group(1)
-        rhs = m.group(2)
+            if not m:
+                continue
 
-        if name not in candidate_ints:
-            continue
+            name = m.group(1)
+            rhs = m.group(2)
 
-        # Déjà validé et spécialisé par l'optimiseur
-        # numérique principal : ne pas refaire son analyse.
-        if name in already_native_ints:
-            continue
+            if name not in candidate_ints:
+                continue
 
-        lowered = lower(rhs, candidate_ints)
+            # Déjà spécialisé par l'optimiseur numérique
+            # principal : conserver sa décision.
+            if name in already_native_ints:
+                continue
 
-        if (
-            lowered is None
-            or lowered[1] != "int"
-        ):
-            unsafe_ints.add(name)
+            lowered = lower(
+                rhs,
+                safe_candidates,
+            )
+
+            if (
+                lowered is None
+                or lowered[1] != "int"
+            ):
+                if name not in unsafe_ints:
+                    unsafe_ints.add(name)
+                    unsafe_changed = True
 
     if unsafe_ints:
         print(
@@ -421,6 +443,10 @@ def repair(lines):
         chain_has_else = False
         chain_pending_close = False
 
+        # Etat de la boucle while actuellement analysee.
+        loop_dynamic_ints = None
+        loop_depth = None
+
         in_main = False
         main_depth = 0
 
@@ -460,7 +486,102 @@ def repair(lines):
             chain_has_else = False
             chain_pending_close = False
 
-        for line in lines:
+        def analyze_while_int_invariants(
+            start_index,
+            entry_ints,
+        ):
+            """
+            Calcule les variables dynamiques garanties entières
+            pendant toute une boucle while.
+
+            On part des faits connus à l'entrée, puis on retire
+            toute variable ayant au moins une réaffectation qui
+            ne peut pas être prouvée entière.
+
+            Le calcul est répété jusqu'au point fixe afin de
+            propager les dépendances :
+
+                a dépend de b
+                b cesse d'être entier
+                => a cesse aussi d'être garanti entier.
+            """
+
+            candidates = set(entry_ints)
+
+            if not candidates:
+                return set()
+
+            first = lines[start_index]
+
+            depth = (
+                first.count("{")
+                - first.count("}")
+            )
+
+            if depth <= 0:
+                return set()
+
+            body = []
+            index = start_index + 1
+
+            while index < len(lines) and depth > 0:
+                current = lines[index]
+
+                body.append(current)
+
+                depth += (
+                    current.count("{")
+                    - current.count("}")
+                )
+
+                index += 1
+
+            # C mal structuré ou boucle non terminée :
+            # abandon conservateur.
+            if depth != 0:
+                return set()
+
+            while True:
+                removed = set()
+
+                for current in body:
+                    assignment = re.match(
+                        r'^\s*'
+                        r'([A-Za-z_][A-Za-z0-9_]*)'
+                        r'\s*=\s*(.*?)\s*;\s*$',
+                        current
+                    )
+
+                    if not assignment:
+                        continue
+
+                    name = assignment.group(1)
+
+                    if name not in candidates:
+                        continue
+
+                    rhs = assignment.group(2)
+
+                    lowered = lower(
+                        rhs,
+                        known,
+                        candidates,
+                    )
+
+                    if (
+                        lowered is None
+                        or lowered[1] != "int"
+                    ):
+                        removed.add(name)
+
+                if not removed:
+                    break
+
+                candidates.difference_update(removed)
+
+            return candidates
+
+        for line_index, line in enumerate(lines):
             if (
                 not in_main
                 and re.match(
@@ -538,8 +659,18 @@ def repair(lines):
                 and main_depth == branch_depth
             )
 
+            in_loop = (
+                in_main
+                and loop_dynamic_ints is not None
+                and loop_depth is not None
+                and main_depth >= loop_depth
+            )
+
             if continuing_chain:
                 flow_context = branch_dynamic_ints
+
+            elif in_loop:
+                flow_context = loop_dynamic_ints
 
             elif in_branch:
                 flow_context = branch_dynamic_ints
@@ -726,14 +857,27 @@ def repair(lines):
                     # merge_chain() à la fin de la chaîne.
                     flow_dynamic_ints.clear()
 
-                # Boucle while non encore analysée à
-                # point fixe : ne propager aucun fait de type
-                # dynamique au-delà de sa frontière.
+                # Entrée dans un while directement sous main.
+                #
+                # Calculer le sous-ensemble des faits d'entrée
+                # qui reste garanti entier sur toutes les
+                # réaffectations possibles de la boucle.
                 elif (
                     entering_while
                     and old_depth == 1
                     and main_depth == 2
                 ):
+                    loop_dynamic_ints = (
+                        analyze_while_int_invariants(
+                            line_index,
+                            flow_dynamic_ints,
+                        )
+                    )
+
+                    loop_depth = 2
+
+                    # L'état principal sera restauré à la sortie
+                    # avec uniquement les invariants prouvés.
                     flow_dynamic_ints.clear()
 
                 # Nouvelle branche else / else if.
@@ -784,6 +928,27 @@ def repair(lines):
                     # la prochaine ligne peut être else/elif.
                     chain_pending_close = True
 
+                # Sortie d'un while vers main().
+                #
+                # Une variable présente dans loop_dynamic_ints
+                # était entière à l'entrée ET toutes ses
+                # réaffectations possibles restent entières.
+                #
+                # Elle est donc également sûre sur une sortie
+                # normale, un break ou après zéro itération.
+                if (
+                    loop_dynamic_ints is not None
+                    and loop_depth is not None
+                    and old_depth == loop_depth
+                    and main_depth == 1
+                ):
+                    flow_dynamic_ints = set(
+                        loop_dynamic_ints
+                    )
+
+                    loop_dynamic_ints = None
+                    loop_depth = None
+
                 # Sortie de main().
                 if main_depth <= 0 and old_depth > 0:
                     if chain_pending_close:
@@ -794,6 +959,10 @@ def repair(lines):
 
                     branch_dynamic_ints = None
                     branch_depth = None
+
+                    loop_dynamic_ints = None
+                    loop_depth = None
+
                     flow_dynamic_ints.clear()
 
         # Cas où une chaîne termine juste avant EOF.

@@ -1,0 +1,12 @@
+i = 0
+a = 1
+b = a + 1
+
+while i < 1:
+    i = i + 1
+    a = "bad"
+    b = a
+
+c = b
+
+print(c)
