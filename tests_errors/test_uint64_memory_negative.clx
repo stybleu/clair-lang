@@ -1,1 +1,2 @@
 manual value = alloc[uint64](1)
+value.write(0, -1)

@@ -1,0 +1,32 @@
+maximum = 18446744073709551615
+signed_max = 9223372036854775807
+first_unsigned = 9223372036854775808
+
+print("Maximum:", maximum)
+print("Signed max:", signed_max)
+print("First unsigned:", first_unsigned)
+
+print("Compare 1:", maximum > signed_max)
+print("Compare 2:", first_unsigned > signed_max)
+
+print("Add:", signed_max + 1)
+print("Sub:", maximum - 1)
+print("Modulo:", maximum % 10)
+
+product = 4294967295 * 4294967295
+print("Product:", product)
+
+with memory values = alloc[uint64](3):
+    print("Type:", values.type())
+    print("Length:", values.length())
+    print("Bytes:", values.size())
+
+    values.write(0, 0)
+    values.write(1, first_unsigned)
+    values.write(2, maximum)
+
+    print("U0:", values.read(0))
+    print("U1:", values.read(1))
+    print("U2:", values.read(2))
+
+print("uint64 OK")

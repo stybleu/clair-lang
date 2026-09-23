@@ -151,10 +151,30 @@ if [ -f "$CFILE" ]; then
 
         echo "[Clariox] Analyse des types natifs"
 
-        if python \
+        NUMERIC_READY=0
+
+        if grep -Eq \
+            'nv_uint\(|NV_MEM_UINT64' \
+            "$NUMERIC_INPUT"; then
+
+            echo \
+                "[Clariox] uint64 détecté : mode numérique exact"
+
+            cp \
+                "$NUMERIC_INPUT" \
+                "$NATIVE_C"
+
+            NUMERIC_READY=1
+
+        elif python \
             "$ROOT/outils/optimise_numeriques_mixte_c.py" \
             "$NUMERIC_INPUT" \
             "$NATIVE_C"; then
+
+            NUMERIC_READY=1
+        fi
+
+        if [ "$NUMERIC_READY" -eq 1 ]; then
 
             echo "[Clariox] Compilation native -O3"
 
@@ -170,8 +190,16 @@ if [ -f "$CFILE" ]; then
 
                 chmod +x "$OUTPUT"
 
-                echo \
-                    "[Clariox] Optimisation native appliquée"
+                if grep -Eq \
+                    'nv_uint\(|NV_MEM_UINT64' \
+                    "$CFILE"; then
+
+                    echo \
+                        "[Clariox] Optimisation native uint64 sûre appliquée"
+                else
+                    echo \
+                        "[Clariox] Optimisation native appliquée"
+                fi
             else
                 echo \
                     "[Clariox] Compilation native échouée"
