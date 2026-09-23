@@ -62,11 +62,16 @@ def unwrap(expr, name):
     return expr[len(prefix):-1]
 
 
-def safe_c_int(expr, native_ints):
+def safe_c_int(expr, native_ints, dynamic_ints=None):
     expr = strip_outer(expr)
 
     if expr in native_ints:
         return expr
+
+    # Variable dynamique connue entière à ce point précis
+    # du flot d'exécution.
+    if dynamic_ints and expr in dynamic_ints:
+        return f"(long long)nv_num({expr})"
 
     if re.fullmatch(r'-?\d+(?:LL)?', expr):
         return expr
@@ -99,10 +104,10 @@ def safe_c_int(expr, native_ints):
     return None
 
 
-def lower(expr, native_ints):
+def lower(expr, native_ints, dynamic_ints=None):
     expr = strip_outer(expr)
 
-    raw = safe_c_int(expr, native_ints)
+    raw = safe_c_int(expr, native_ints, dynamic_ints)
 
     if raw is not None:
         return raw, "int"
@@ -110,12 +115,12 @@ def lower(expr, native_ints):
     inner = unwrap(expr, "nv_int")
 
     if inner is not None:
-        raw = safe_c_int(inner, native_ints)
+        raw = safe_c_int(inner, native_ints, dynamic_ints)
 
         if raw is not None:
             return raw, "int"
 
-        nested = lower(inner, native_ints)
+        nested = lower(inner, native_ints, dynamic_ints)
 
         if nested is not None:
             return nested
@@ -140,8 +145,8 @@ def lower(expr, native_ints):
         if len(args) != 2:
             return None
 
-        a = lower(args[0], native_ints)
-        b = lower(args[1], native_ints)
+        a = lower(args[0], native_ints, dynamic_ints)
+        b = lower(args[1], native_ints, dynamic_ints)
 
         if (
             a is None
@@ -183,8 +188,8 @@ def lower(expr, native_ints):
         if len(args) != 2:
             return None
 
-        a = lower(args[0], native_ints)
-        b = lower(args[1], native_ints)
+        a = lower(args[0], native_ints, dynamic_ints)
+        b = lower(args[1], native_ints, dynamic_ints)
 
         if (
             a is None
@@ -389,13 +394,39 @@ def repair(lines):
 
     # Première phase :
     # continuer l'abaissement numérique natif existant.
+    #
+    # flow_dynamic_ints contient les NvVal que l'on sait
+    # entiers au point courant du programme.
+    #
+    # Exemple :
+    #
+    #     a = 10
+    #     b = a + 20
+    #     a = "hello"
+    #
+    # a reste dynamique, mais b peut devenir natif.
     while changed:
         changed = False
         new_output = []
         known = set(native_ints)
 
+        flow_dynamic_ints = set()
+        in_main = False
+        main_depth = 0
+
         for line in lines:
-            # NvVal x = expression entière native;
+            if (
+                not in_main
+                and re.match(r'^\s*int\s+main\s*\(', line)
+            ):
+                in_main = True
+
+            top_level_main = (
+                in_main
+                and main_depth == 1
+            )
+
+            # NvVal x = expression;
             m = re.match(
                 r'^(\s*)NvVal\s+'
                 r'([A-Za-z_][A-Za-z0-9_]*)'
@@ -410,28 +441,89 @@ def repair(lines):
                     m.group(3),
                 )
 
-                # Les temporaires de "selon" doivent rester NvVal :
-                # ils sont utilisés ensuite par les comparaisons
-                # dynamiques du runtime.
-                if (
-                    not name.startswith("__match")
-                    and name not in unsafe_ints
-                ):
-                    lowered = lower(rhs, known)
+                lowered = lower(
+                    rhs,
+                    known,
+                    (
+                        flow_dynamic_ints
+                        if top_level_main
+                        else None
+                    ),
+                )
 
-                    if lowered and lowered[1] == "int":
-                        line = (
-                            f"{indent}long long {name} = "
-                            f"{lowered[0]};\n"
+                # Les temporaires de "selon" restent NvVal.
+                if name.startswith("__match"):
+                    pass
+
+                # Variable qui change de type :
+                # elle reste NvVal, mais son type courant
+                # peut être connu dans du code linéaire.
+                elif name in unsafe_ints:
+                    if (
+                        top_level_main
+                        and lowered is not None
+                        and lowered[1] == "int"
+                    ):
+                        flow_dynamic_ints.add(name)
+                    else:
+                        flow_dynamic_ints.discard(name)
+
+                # Variable stable : abaissement natif.
+                elif (
+                    lowered is not None
+                    and lowered[1] == "int"
+                ):
+                    line = (
+                        f"{indent}long long {name} = "
+                        f"{lowered[0]};\n"
+                    )
+
+                    known.add(name)
+                    native_ints.add(name)
+                    flow_dynamic_ints.discard(name)
+                    changed = True
+
+            # Réaffectation simple d'une variable dynamique.
+            if top_level_main:
+                assign = re.match(
+                    r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.*?)\s*;\s*$',
+                    line
+                )
+
+                if assign:
+                    name = assign.group(1)
+                    rhs = assign.group(2)
+
+                    if (
+                        name in unsafe_ints
+                        or name in flow_dynamic_ints
+                    ):
+                        reassigned = lower(
+                            rhs,
+                            known,
+                            flow_dynamic_ints,
                         )
 
-                        known.add(name)
-                        native_ints.add(name)
-                        changed = True
+                        if (
+                            reassigned is not None
+                            and reassigned[1] == "int"
+                        ):
+                            flow_dynamic_ints.add(name)
+                        else:
+                            flow_dynamic_ints.discard(name)
 
-            # if (nv_truth(expression numérique))
+            # Conditions numériques.
             def truth_callback(inner):
-                lowered = lower(inner, known)
+                lowered = lower(
+                    inner,
+                    known,
+                    (
+                        flow_dynamic_ints
+                        if top_level_main
+                        else None
+                    ),
+                )
 
                 if lowered is None:
                     return None
@@ -451,6 +543,36 @@ def repair(lines):
                 changed = True
 
             new_output.append(new_line)
+
+            # Suivi conservateur de la profondeur de main().
+            #
+            # Les lignes générées par Clariox sont suffisamment
+            # structurées pour cette première optimisation.
+            if in_main:
+                opens = new_line.count("{")
+                closes = new_line.count("}")
+
+                old_depth = main_depth
+                main_depth += opens - closes
+
+                # Ne pas propager des informations locales à
+                # travers un if/while/autre bloc imbriqué.
+                if (
+                    old_depth == 1
+                    and main_depth > 1
+                ):
+                    flow_dynamic_ints.clear()
+
+                if (
+                    old_depth > 1
+                    and main_depth == 1
+                ):
+                    flow_dynamic_ints.clear()
+
+                if main_depth <= 0 and old_depth > 0:
+                    in_main = False
+                    main_depth = 0
+                    flow_dynamic_ints.clear()
 
         lines = new_output
 

@@ -1,0 +1,11 @@
+a = 10
+b = a + 1
+
+a = "hello"
+print(a)
+
+a = 20
+c = a + 2
+
+print(b)
+print(c)
