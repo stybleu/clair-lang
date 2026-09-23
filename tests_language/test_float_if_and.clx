@@ -1,0 +1,7 @@
+a = 1.5
+b = 8.0
+
+if a < 2.0 and b > 5.0:
+    print("and-ok")
+else:
+    print("bad")

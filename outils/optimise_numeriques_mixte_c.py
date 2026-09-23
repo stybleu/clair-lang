@@ -699,6 +699,7 @@ def repair(lines):
     flow_float_specialized = []
     flow_float_loop_rewritten = []
     flow_float_loop_unboxed = []
+    flow_float_if_conditions = 0
 
     numeric_output = []
 
@@ -875,6 +876,47 @@ def repair(lines):
                 merged[name] = values[0]
 
         return chain_end, merged
+
+    def lower_float_if_header(
+        source_line,
+        entry_types,
+    ):
+        """
+        Abaisse une condition if / else if numérique en C.
+
+        entry_types représente l'état numérique garanti à
+        l'entrée commune de toute la chaîne if/elif/else.
+        """
+
+        match = re.match(
+            r'^(\s*)'
+            r'(if|else\s+if)'
+            r'\s*\((.*)\)\s*\{\s*$',
+            source_line.rstrip("\n"),
+        )
+
+        if not match:
+            return source_line, False
+
+        indent = match.group(1)
+        keyword = match.group(2)
+        condition = match.group(3)
+
+        lowered = lower_flow_condition(
+            condition,
+            native_ints,
+            native_floats,
+            entry_types,
+        )
+
+        if lowered is None:
+            return source_line, False
+
+        return (
+            f"{indent}{keyword} "
+            f"({strip_outer(lowered)}) {{\n",
+            True,
+        )
 
     # --------------------------------------------------------
     # Analyse à point fixe des float à travers while.
@@ -1110,6 +1152,7 @@ def repair(lines):
 
     pending_if_end = None
     pending_if_types = None
+    pending_if_entry_types = None
 
     pending_while_end = None
     pending_while_types = None
@@ -1238,6 +1281,13 @@ def repair(lines):
                 stripped,
             )
         ):
+            # Tous les elif de cette chaîne voient le même
+            # état d'entrée : si un elif est évalué, aucune
+            # branche précédente n'a été exécutée.
+            pending_if_entry_types = dict(
+                flow_numeric_types
+            )
+
             (
                 pending_if_end,
                 pending_if_types,
@@ -1246,9 +1296,56 @@ def repair(lines):
                 flow_numeric_types,
             )
 
+            (
+                rewritten_if,
+                if_condition_lowered,
+            ) = lower_float_if_header(
+                source_line,
+                pending_if_entry_types,
+            )
+
+            if if_condition_lowered:
+                source_line = rewritten_if
+                stripped = source_line.strip()
+                flow_float_if_conditions += 1
+
             # Les faits seront restaurés uniquement à la fin
             # de la chaîne, après fusion de tous les chemins.
             flow_numeric_types.clear()
+
+        elif (
+            top_level_main
+            and re.match(
+                r'^else\s+if\s*\(',
+                stripped,
+            )
+        ):
+            # Un elif peut toujours être abaissé lorsqu'il
+            # repose uniquement sur des variables déjà natives.
+            #
+            # Si l'état d'entrée de la chaîne est encore
+            # disponible, il peut également fournir les faits
+            # dynamiques prouvés. Sinon {} force un repli
+            # conservateur sur les seuls native_ints /
+            # native_floats.
+            elif_entry_types = (
+                pending_if_entry_types
+                if pending_if_entry_types is not None
+                else {}
+            )
+
+            (
+                rewritten_if,
+                if_condition_lowered,
+            ) = lower_float_if_header(
+                source_line,
+                elif_entry_types,
+            )
+
+            if if_condition_lowered:
+                source_line = rewritten_if
+                stripped = source_line.strip()
+                flow_float_if_conditions += 1
 
         elif (
             top_level_main
@@ -1460,6 +1557,7 @@ def repair(lines):
 
                 pending_if_end = None
                 pending_if_types = None
+                pending_if_entry_types = None
 
             # Fin d'un while analysé :
             # restaurer uniquement les float garantis invariants
@@ -1499,6 +1597,7 @@ def repair(lines):
 
                 pending_if_end = None
                 pending_if_types = None
+                pending_if_entry_types = None
 
                 pending_while_end = None
                 pending_while_types = None
@@ -1809,6 +1908,13 @@ def repair(lines):
             set(flow_float_rebox_delayed)
         ):
             print(f"  {name}")
+
+    if flow_float_if_conditions:
+        print(
+            "[Clariox OPT] Conditions float natives "
+            "dans if/elif : "
+            f"{flow_float_if_conditions}"
+        )
 
     if flow_float_specialized:
         print(
