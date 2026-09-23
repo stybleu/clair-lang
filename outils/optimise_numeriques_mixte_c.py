@@ -368,6 +368,77 @@ def lower_flow_number(
 
     return None
 
+
+def lower_flow_condition(
+    expr,
+    native_ints,
+    native_floats,
+    dynamic_types=None,
+):
+    """
+    Abaisse une condition numérique Clariox vers une
+    expression booléenne C native.
+
+    Première version volontairement conservatrice :
+    comparaisons numériques uniquement.
+    """
+
+    expr = strip_outer(expr)
+
+    inner = unwrap(expr, "nv_truth")
+
+    if inner is not None:
+        return lower_flow_condition(
+            inner,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+    comparisons = {
+        "nv_eq": "==",
+        "nv_ne": "!=",
+        "nv_lt": "<",
+        "nv_le": "<=",
+        "nv_gt": ">",
+        "nv_ge": ">=",
+    }
+
+    for fn, op in comparisons.items():
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_flow_number(
+            args[0],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        right = lower_flow_number(
+            args[1],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if left is None or right is None:
+            return None
+
+        return (
+            f"(({left[0]}) {op} ({right[0]}))"
+        )
+
+    return None
+
+
 def replace_balanced(line, function, callback):
     marker = function + "("
     pos = 0
@@ -866,14 +937,34 @@ def repair(lines):
 
         header = lines[start_index]
 
-        # La condition du while lit encore les NvVal originaux.
-        # Si elle dépend d'un candidat, on ne peut pas laisser
-        # sa copie NvVal devenir obsolète pendant la boucle.
-        for name in names:
-            if re.search(
+        header_uses_candidate = any(
+            re.search(
                 rf'\b{re.escape(name)}\b',
                 header,
-            ):
+            )
+            is not None
+            for name in names
+        )
+
+        if header_uses_candidate:
+            header_match = re.match(
+                r'^\s*while\s*\((.*)\)\s*\{\s*$',
+                header.rstrip("\n"),
+            )
+
+            if not header_match:
+                return {}
+
+            lowered_condition = lower_flow_condition(
+                header_match.group(1),
+                native_ints,
+                native_floats,
+                invariants,
+            )
+
+            # Si la condition n'est pas entièrement numérique
+            # et comprise par l'optimiseur, rester conservateur.
+            if lowered_condition is None:
                 return {}
 
         index = start_index + 1
@@ -1122,6 +1213,46 @@ def repair(lines):
                         f"double {native_name} = "
                         f"nv_num({original_name});\n"
                     )
+
+                # --------------------------------------------
+                # La condition du while peut maintenant lire
+                # directement les temporaires double.
+                # --------------------------------------------
+
+                header_match = re.match(
+                    r'^(\s*)while\s*\((.*)\)\s*\{\s*$',
+                    source_line.rstrip("\n"),
+                )
+
+                if header_match:
+                    condition = lower_flow_condition(
+                        header_match.group(2),
+                        native_ints,
+                        native_floats,
+                        pending_while_types,
+                    )
+
+                    if condition is not None:
+                        for (
+                            original_name,
+                            native_name,
+                        ) in active_while_unbox.items():
+                            condition = re.sub(
+                                rf'nv_num\(\s*'
+                                rf'{re.escape(original_name)}'
+                                rf'\s*\)',
+                                native_name,
+                                condition,
+                            )
+
+                        source_line = (
+                            f"{header_match.group(1)}"
+                            f"while "
+                            f"({strip_outer(condition)}) "
+                            f"{{\n"
+                        )
+
+                        stripped = source_line.strip()
 
             # Les faits ne seront restaurés qu'à la sortie de
             # la boucle, après validation à point fixe.
