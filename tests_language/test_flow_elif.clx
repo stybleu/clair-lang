@@ -1,0 +1,13 @@
+a = 10
+
+if a == 0:
+    x = a + 1
+    print(x)
+elif a == 10:
+    y = a + 2
+    print(y)
+else:
+    print("bad")
+
+a = "after"
+print(a)

@@ -393,24 +393,28 @@ def repair(lines):
     changed = True
 
     # Première phase :
-    # continuer l'abaissement numérique natif existant.
+    # abaissement numérique natif avec analyse locale du flot.
     #
-    # flow_dynamic_ints contient les NvVal que l'on sait
-    # entiers au point courant du programme.
+    # Deux contextes sont suivis :
     #
-    # Exemple :
+    # - flow_dynamic_ints :
+    #     faits connus au niveau principal de main()
     #
-    #     a = 10
-    #     b = a + 20
-    #     a = "hello"
+    # - branch_dynamic_ints :
+    #     copie locale de ces faits à l'entrée d'un if simple
     #
-    # a reste dynamique, mais b peut devenir natif.
+    # Les faits d'une branche ne sont jamais propagés après
+    # la sortie du bloc.
     while changed:
         changed = False
         new_output = []
         known = set(native_ints)
 
         flow_dynamic_ints = set()
+
+        branch_dynamic_ints = None
+        branch_depth = None
+
         in_main = False
         main_depth = 0
 
@@ -424,6 +428,42 @@ def repair(lines):
             top_level_main = (
                 in_main
                 and main_depth == 1
+            )
+
+            # Ne jamais réutiliser l'état du premier if dans
+            # un else / else if. Ces branches seront optimisées
+            # plus tard avec une vraie fusion de flot.
+            if (
+                branch_dynamic_ints is not None
+                and re.match(
+                    r'^\s*}?\s*else\b',
+                    line
+                )
+            ):
+                branch_dynamic_ints = None
+                branch_depth = None
+
+            in_simple_if = (
+                in_main
+                and branch_dynamic_ints is not None
+                and branch_depth is not None
+                and main_depth == branch_depth
+            )
+
+            if top_level_main:
+                flow_context = flow_dynamic_ints
+            elif in_simple_if:
+                flow_context = branch_dynamic_ints
+            else:
+                flow_context = None
+
+            # Repérer un if directement dans main().
+            entering_simple_if = (
+                top_level_main
+                and re.match(
+                    r'^\s*if\s*\(',
+                    line
+                ) is not None
             )
 
             # NvVal x = expression;
@@ -444,31 +484,29 @@ def repair(lines):
                 lowered = lower(
                     rhs,
                     known,
-                    (
-                        flow_dynamic_ints
-                        if top_level_main
-                        else None
-                    ),
+                    flow_context,
                 )
 
-                # Les temporaires de "selon" restent NvVal.
+                # Temporaires internes de selon :
+                # toujours dynamiques.
                 if name.startswith("__match"):
                     pass
 
-                # Variable qui change de type :
-                # elle reste NvVal, mais son type courant
-                # peut être connu dans du code linéaire.
+                # Variable Clariox instable :
+                # elle reste NvVal mais son type courant
+                # peut être connu localement.
                 elif name in unsafe_ints:
-                    if (
-                        top_level_main
-                        and lowered is not None
-                        and lowered[1] == "int"
-                    ):
-                        flow_dynamic_ints.add(name)
-                    else:
-                        flow_dynamic_ints.discard(name)
+                    if flow_context is not None:
+                        if (
+                            lowered is not None
+                            and lowered[1] == "int"
+                        ):
+                            flow_context.add(name)
+                        else:
+                            flow_context.discard(name)
 
-                # Variable stable : abaissement natif.
+                # Variable stable :
+                # spécialisation vers long long.
                 elif (
                     lowered is not None
                     and lowered[1] == "int"
@@ -480,11 +518,14 @@ def repair(lines):
 
                     known.add(name)
                     native_ints.add(name)
-                    flow_dynamic_ints.discard(name)
+
+                    if flow_context is not None:
+                        flow_context.discard(name)
+
                     changed = True
 
-            # Réaffectation simple d'une variable dynamique.
-            if top_level_main:
+            # Réaffectation d'une variable dynamique.
+            if flow_context is not None:
                 assign = re.match(
                     r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
                     r'\s*=\s*(.*?)\s*;\s*$',
@@ -497,32 +538,28 @@ def repair(lines):
 
                     if (
                         name in unsafe_ints
-                        or name in flow_dynamic_ints
+                        or name in flow_context
                     ):
                         reassigned = lower(
                             rhs,
                             known,
-                            flow_dynamic_ints,
+                            flow_context,
                         )
 
                         if (
                             reassigned is not None
                             and reassigned[1] == "int"
                         ):
-                            flow_dynamic_ints.add(name)
+                            flow_context.add(name)
                         else:
-                            flow_dynamic_ints.discard(name)
+                            flow_context.discard(name)
 
             # Conditions numériques.
             def truth_callback(inner):
                 lowered = lower(
                     inner,
                     known,
-                    (
-                        flow_dynamic_ints
-                        if top_level_main
-                        else None
-                    ),
+                    flow_context,
                 )
 
                 if lowered is None:
@@ -544,10 +581,7 @@ def repair(lines):
 
             new_output.append(new_line)
 
-            # Suivi conservateur de la profondeur de main().
-            #
-            # Les lignes générées par Clariox sont suffisamment
-            # structurées pour cette première optimisation.
+            # Mise à jour de la profondeur C.
             if in_main:
                 opens = new_line.count("{")
                 closes = new_line.count("}")
@@ -555,23 +589,63 @@ def repair(lines):
                 old_depth = main_depth
                 main_depth += opens - closes
 
-                # Ne pas propager des informations locales à
-                # travers un if/while/autre bloc imbriqué.
+                # Entrée dans un if simple directement sous main().
                 if (
+                    entering_simple_if
+                    and old_depth == 1
+                    and main_depth == 2
+                ):
+                    branch_dynamic_ints = set(
+                        flow_dynamic_ints
+                    )
+                    branch_depth = 2
+
+                    # Les faits extérieurs ne seront pas
+                    # réutilisés après le bloc.
+                    flow_dynamic_ints.clear()
+
+                # Autre bloc : while, bloc imbriqué, etc.
+                elif (
                     old_depth == 1
                     and main_depth > 1
                 ):
                     flow_dynamic_ints.clear()
 
+                # Bloc imbriqué à l'intérieur du if :
+                # abandonner les faits locaux pour rester sûr.
+                if (
+                    branch_dynamic_ints is not None
+                    and branch_depth is not None
+                    and old_depth == branch_depth
+                    and main_depth > branch_depth
+                ):
+                    branch_dynamic_ints.clear()
+
+                # Retour d'un bloc imbriqué dans le if :
+                # ne rien supposer.
+                if (
+                    branch_dynamic_ints is not None
+                    and branch_depth is not None
+                    and old_depth > branch_depth
+                    and main_depth == branch_depth
+                ):
+                    branch_dynamic_ints.clear()
+
+                # Sortie du if vers main().
                 if (
                     old_depth > 1
                     and main_depth == 1
                 ):
+                    branch_dynamic_ints = None
+                    branch_depth = None
                     flow_dynamic_ints.clear()
 
                 if main_depth <= 0 and old_depth > 0:
                     in_main = False
                     main_depth = 0
+
+                    branch_dynamic_ints = None
+                    branch_depth = None
                     flow_dynamic_ints.clear()
 
         lines = new_output

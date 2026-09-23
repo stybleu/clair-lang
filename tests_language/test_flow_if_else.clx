@@ -1,0 +1,11 @@
+a = 10
+
+if a == 99:
+    x = a + 1
+    print(x)
+else:
+    y = a + 2
+    print(y)
+
+a = "after"
+print(a)
