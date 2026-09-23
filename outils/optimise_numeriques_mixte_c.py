@@ -809,7 +809,7 @@ def repair(lines):
                     return None
 
                 if lowered[1] in ("bool", "int"):
-                    return f"({lowered[0]})"
+                    return strip_outer(lowered[0])
 
                 return None
 
