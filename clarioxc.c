@@ -2240,6 +2240,14 @@ static const char *current_owner(void) {
 
 static Block *top_block(void){return block_count?&blocks[block_count-1]:NULL;}
 
+static int current_function_body_indent(void){
+    for(int i=block_count-1;i>=0;i--){
+        if(blocks[i].kind==BLK_FUNC)
+            return blocks[i].indent + 4;
+    }
+    return -1;
+}
+
 static void push_block(BlockKind k,int indent,OutKind out,const char*owner,int try_id){
     if(block_count>=MAX_BLOCKS)die("Trop de blocs imbriqués");
     Block*b=&blocks[block_count++];memset(b,0,sizeof(*b));b->kind=k;b->indent=indent;b->out_kind=out;b->try_id=try_id;if(owner)snprintf(b->owner,sizeof(b->owner),"%s",owner);
@@ -2309,6 +2317,259 @@ static void emit_memory_cleanup_for_loop_jump(FILE *out,int indent){
             emit_indent(out,indent);
             fprintf(out,"nv_memory_scope_leave(%s);\n",blocks[bi].owner);
         }
+    }
+}
+
+
+
+/* ==========================================================
+   Remontée des variables locales de fonction.
+
+   Clariox utilise une portée de fonction pour les variables
+   ordinaires. En C, une déclaration réalisée dans un if/while
+   serait limitée à ce bloc.
+
+   Une première déclaration imbriquée marquée :
+
+       [CLARIOX_HOIST_LOCAL] NvVal y = expr;
+
+   devient :
+
+       NvVal y = nv_none();
+
+       ...
+       y = expr;
+
+   La transformation est volontairement limitée aux marqueurs
+   émis par emit_set_lvalue().
+   ========================================================== */
+
+static int is_generated_function_signature(
+    const char *line
+){
+    return
+        strncmp(line,"static NvVal ",13)==0 &&
+        strstr(line,"(NvVal *__args")!=NULL;
+}
+
+static int extract_hoisted_local_name(
+    const char *line,
+    char *name,
+    size_t name_size
+){
+    const char *marker =
+        strstr(line,"/*CLARIOX_HOIST_LOCAL*/");
+
+    if(!marker)
+        return 0;
+
+    const char *p =
+        strstr(marker,"NvVal ");
+
+    if(!p)
+        return 0;
+
+    p += 6;
+
+    size_t n = 0;
+
+    while(
+        (isalnum((unsigned char)p[n]) || p[n]=='_') &&
+        n + 1 < name_size
+    ){
+        n++;
+    }
+
+    if(n==0)
+        return 0;
+
+    memcpy(name,p,n);
+    name[n]='\0';
+
+    return 1;
+}
+
+static int is_function_prologue_line(
+    const char *line
+){
+    const char *p=line;
+
+    while(*p==' ' || *p=='\t')
+        p++;
+
+    if(*p=='\0' || *p=='\n' || *p=='\r')
+        return 1;
+
+    if(
+        strncmp(p,"NvVal ",6)==0 &&
+        strstr(p," = nv_arg(")!=NULL
+    ){
+        return 1;
+    }
+
+    if(strncmp(p,"nv_expect_type(",15)==0)
+        return 1;
+
+    return 0;
+}
+
+static void emit_line_without_hoist_marker(
+    FILE *dst,
+    const char *line
+){
+    const char *marker =
+        strstr(line,"/*CLARIOX_HOIST_LOCAL*/");
+
+    if(!marker){
+        fputs(line,dst);
+        return;
+    }
+
+    fwrite(
+        line,
+        1,
+        (size_t)(marker-line),
+        dst
+    );
+
+    const char *p =
+        marker + strlen("/*CLARIOX_HOIST_LOCAL*/");
+
+    while(*p==' ' || *p=='\t')
+        p++;
+
+    if(strncmp(p,"NvVal ",6)==0)
+        p += 6;
+
+    fputs(p,dst);
+}
+
+static void flush_function_segment(
+    FILE *segment,
+    FILE *dst,
+    VarScope *locals
+){
+    if(!segment)
+        return;
+
+    fflush(segment);
+    rewind(segment);
+
+    char line[MAX_LINE * 8];
+
+    if(!fgets(line,sizeof(line),segment))
+        return;
+
+    /* Signature de fonction. */
+    fputs(line,dst);
+
+    int declarations_emitted = 0;
+
+    while(fgets(line,sizeof(line),segment)){
+        if(
+            !declarations_emitted &&
+            !is_function_prologue_line(line)
+        ){
+            for(int i=0;i<locals->count;i++){
+                fprintf(
+                    dst,
+                    "    NvVal %s = nv_none();\n",
+                    locals->vars[i]
+                );
+            }
+
+            declarations_emitted = 1;
+        }
+
+        emit_line_without_hoist_marker(
+            dst,
+            line
+        );
+    }
+
+    /*
+     * Cas théorique d'une fonction ne contenant que son
+     * prologue. Les marqueurs ne devraient alors pas exister,
+     * mais garder le traitement complet.
+     */
+    if(!declarations_emitted){
+        for(int i=0;i<locals->count;i++){
+            fprintf(
+                dst,
+                "    NvVal %s = nv_none();\n",
+                locals->vars[i]
+            );
+        }
+    }
+}
+
+static void emit_functions_with_hoisted_locals(
+    FILE *src,
+    FILE *dst
+){
+    rewind(src);
+
+    FILE *segment = NULL;
+    VarScope locals;
+    memset(&locals,0,sizeof(locals));
+
+    char line[MAX_LINE * 8];
+
+    while(fgets(line,sizeof(line),src)){
+        if(is_generated_function_signature(line)){
+            if(segment){
+                flush_function_segment(
+                    segment,
+                    dst,
+                    &locals
+                );
+
+                fclose(segment);
+            }
+
+            segment = tmpfile();
+
+            if(!segment)
+                die("Unable to create function hoist temporary file");
+
+            memset(
+                &locals,
+                0,
+                sizeof(locals)
+            );
+        }
+
+        if(!segment){
+            fputs(line,dst);
+            continue;
+        }
+
+        char name[MAX_NAME];
+
+        if(
+            extract_hoisted_local_name(
+                line,
+                name,
+                sizeof(name)
+            )
+        ){
+            scope_add(
+                &locals,
+                name
+            );
+        }
+
+        fputs(line,segment);
+    }
+
+    if(segment){
+        flush_function_segment(
+            segment,
+            dst,
+            &locals
+        );
+
+        fclose(segment);
     }
 }
 
@@ -2724,12 +2985,36 @@ static void emit_set_lvalue(FILE*out,int indent,const char*lhs,const char*rhs,in
     if(augop){if(!scope_has(scope,vn))die("Line %d: unknown variable '%s'",lineno,vn);char*rv=compile_expr(rhs,lineno);val=fmtdup("%s(%s,%s)",strcmp(augop,"+")==0?"nv_add":strcmp(augop,"-")==0?"nv_sub":strcmp(augop,"*")==0?"nv_mul":"nv_div",vn,rv);free(rv);}else val=compile_expr(rhs,lineno);
     emit_indent(out,indent);
     if(!scope_has(scope,vn)){
-        fprintf(
-            out,
-            "NvVal %s = %s;\n",
-            vn,
-            val
-        );
+        int hoist_function_local = 0;
+
+        if(scope == &func_scope){
+            int function_body_indent =
+                current_function_body_indent();
+
+            if(
+                function_body_indent >= 0 &&
+                indent > function_body_indent
+            ){
+                hoist_function_local = 1;
+            }
+        }
+
+        if(hoist_function_local){
+            fprintf(
+                out,
+                "/*CLARIOX_HOIST_LOCAL*/ "
+                "NvVal %s = %s;\n",
+                vn,
+                val
+            );
+        }else{
+            fprintf(
+                out,
+                "NvVal %s = %s;\n",
+                vn,
+                val
+            );
+        }
 
         scope_add_typed(
             scope,
@@ -3109,7 +3394,11 @@ static void compile_source(FILE*in,const char*cfile){
     FILE*rt=fopen(runtimefile,"w"); if(!rt)die("Unable to create %s",runtimefile);
     fputs("#ifndef CLARIOX_RUNTIME_H\n#define CLARIOX_RUNTIME_H\n",rt); fputs(RUNTIME_C,rt); fputs("\n#endif\n",rt); fclose(rt);
     FILE*out=fopen(cfile,"w");if(!out)die("Unable to create %s",cfile);fputs("#include \"clariox_runtime.h\"\n",out);
-    int ch;while((ch=fgetc(func_out))!=EOF)fputc(ch,out);
+    int ch;
+    emit_functions_with_hoisted_locals(
+        func_out,
+        out
+    );
     emit_dispatch(out);
     fprintf(out,"\nint main(void){\n");while((ch=fgetc(main_out))!=EOF)fputc(ch,out);fprintf(out,"    return 0;\n}\n");
     fclose(out);fclose(main_out);fclose(func_out);remove(main_tmp);remove(func_tmp);
