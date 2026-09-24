@@ -963,12 +963,438 @@ def compatible(expected, actual):
     return False
 
 
+
+def specialization_c_name(
+    name,
+    arg_types,
+    return_type,
+):
+    args_tag = (
+        "_".join(arg_types)
+        if arg_types
+        else "void"
+    )
+
+    return (
+        f"clariox_spec_{name}_"
+        f"{args_tag}_to_{return_type}"
+    )
+
+
+def numeric_c_type(typ):
+    if typ == "float":
+        return "double"
+
+    if typ == "int":
+        return "long long"
+
+    return None
+
+
+def lower_numeric_condition_c(
+    expr,
+    symbols,
+):
+    expr = strip_outer_parens(expr)
+
+    inner = unwrap(expr, "nv_truth")
+
+    if inner is not None:
+        lowered = lower_numeric_expr_c(
+            inner,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        return f"(({lowered[0]}) != 0)"
+
+    logical = {
+        "nv_and": "&&",
+        "nv_or": "||",
+    }
+
+    for fn, op in logical.items():
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_numeric_condition_c(
+            args[0],
+            symbols,
+        )
+
+        right = lower_numeric_condition_c(
+            args[1],
+            symbols,
+        )
+
+        if left is None or right is None:
+            return None
+
+        return (
+            f"(({left}) {op} ({right}))"
+        )
+
+    inner = unwrap(expr, "nv_not")
+
+    if inner is not None:
+        lowered = lower_numeric_condition_c(
+            inner,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        return f"!({lowered})"
+
+    comparisons = {
+        "nv_eq": "==",
+        "nv_ne": "!=",
+        "nv_lt": "<",
+        "nv_le": "<=",
+        "nv_gt": ">",
+        "nv_ge": ">=",
+    }
+
+    for fn, op in comparisons.items():
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_numeric_expr_c(
+            args[0],
+            symbols,
+        )
+
+        right = lower_numeric_expr_c(
+            args[1],
+            symbols,
+        )
+
+        if left is None or right is None:
+            return None
+
+        return (
+            f"(({left[0]}) {op} ({right[0]}))"
+        )
+
+    return None
+
+
+def lower_numeric_expr_c(
+    expr,
+    symbols,
+):
+    expr = strip_outer_parens(expr)
+
+    conditional = split_top_level_ternary(
+        expr
+    )
+
+    if conditional is not None:
+        condition, yes_expr, no_expr = (
+            conditional
+        )
+
+        lowered_condition = (
+            lower_numeric_condition_c(
+                condition,
+                symbols,
+            )
+        )
+
+        yes_value = lower_numeric_expr_c(
+            yes_expr,
+            symbols,
+        )
+
+        no_value = lower_numeric_expr_c(
+            no_expr,
+            symbols,
+        )
+
+        if (
+            lowered_condition is None
+            or yes_value is None
+            or no_value is None
+        ):
+            return None
+
+        result_type = promote(
+            yes_value[1],
+            no_value[1],
+        )
+
+        return (
+            f"(({lowered_condition}) "
+            f"? ({yes_value[0]}) "
+            f": ({no_value[0]}))",
+            result_type,
+        )
+
+    if re.fullmatch(
+        r'[A-Za-z_][A-Za-z0-9_]*',
+        expr,
+    ):
+        typ = symbols.get(expr)
+
+        if typ in NUMERIC_TYPES:
+            return expr, typ
+
+        return None
+
+    if re.fullmatch(
+        r'-?\d+(?:LL)?',
+        expr,
+    ):
+        return expr, "int"
+
+    if re.fullmatch(
+        r'-?(?:\d+\.\d*|\d*\.\d+)'
+        r'(?:[eE][+-]?\d+)?',
+        expr,
+    ):
+        return expr, "float"
+
+    inner = unwrap(expr, "nv_int")
+
+    if inner is not None:
+        lowered = lower_numeric_expr_c(
+            inner,
+            symbols,
+        )
+
+        if lowered is not None:
+            return (
+                f"(long long)({lowered[0]})",
+                "int",
+            )
+
+        if re.fullmatch(
+            r'-?\d+(?:LL)?',
+            inner.strip(),
+        ):
+            return inner.strip(), "int"
+
+        return None
+
+    inner = unwrap(expr, "nv_float")
+
+    if inner is not None:
+        lowered = lower_numeric_expr_c(
+            inner,
+            symbols,
+        )
+
+        if lowered is not None:
+            return (
+                f"(double)({lowered[0]})",
+                "float",
+            )
+
+        return None
+
+    inner = unwrap(expr, "nv_neg")
+
+    if inner is not None:
+        lowered = lower_numeric_expr_c(
+            inner,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        return (
+            f"-({lowered[0]})",
+            lowered[1],
+        )
+
+    operations = {
+        "nv_add": "+",
+        "nv_sub": "-",
+        "nv_mul": "*",
+    }
+
+    for fn, op in operations.items():
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_numeric_expr_c(
+            args[0],
+            symbols,
+        )
+
+        right = lower_numeric_expr_c(
+            args[1],
+            symbols,
+        )
+
+        if left is None or right is None:
+            return None
+
+        result_type = promote(
+            left[1],
+            right[1],
+        )
+
+        return (
+            f"(({left[0]}) {op} ({right[0]}))",
+            result_type,
+        )
+
+    inner = unwrap(expr, "nv_div")
+
+    if inner is not None:
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_numeric_expr_c(
+            args[0],
+            symbols,
+        )
+
+        right = lower_numeric_expr_c(
+            args[1],
+            symbols,
+        )
+
+        if left is None or right is None:
+            return None
+
+        return (
+            f"((double)({left[0]}) "
+            f"/ (double)({right[0]}))",
+            "float",
+        )
+
+    inner = unwrap(expr, "nv_mod")
+
+    if inner is not None:
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_numeric_expr_c(
+            args[0],
+            symbols,
+        )
+
+        right = lower_numeric_expr_c(
+            args[1],
+            symbols,
+        )
+
+        if left is None or right is None:
+            return None
+
+        return (
+            f"((long long)({left[0]}) "
+            f"% (long long)({right[0]}))",
+            "int",
+        )
+
+    inner = unwrap(expr, "nv_pow")
+
+    if inner is not None:
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_numeric_expr_c(
+            args[0],
+            symbols,
+        )
+
+        right = lower_numeric_expr_c(
+            args[1],
+            symbols,
+        )
+
+        if left is None or right is None:
+            return None
+
+        return (
+            f"pow((double)({left[0]}), "
+            f"(double)({right[0]}))",
+            "float",
+        )
+
+    comparisons = {
+        "nv_eq": "==",
+        "nv_ne": "!=",
+        "nv_lt": "<",
+        "nv_le": "<=",
+        "nv_gt": ">",
+        "nv_ge": ">=",
+    }
+
+    for fn, op in comparisons.items():
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        left = lower_numeric_expr_c(
+            args[0],
+            symbols,
+        )
+
+        right = lower_numeric_expr_c(
+            args[1],
+            symbols,
+        )
+
+        if left is None or right is None:
+            return None
+
+        return (
+            f"(({left[0]}) {op} ({right[0]}))",
+            "int",
+        )
+
+    return None
+
+
 def inline_chunk(
     chunk,
     functions,
     local_types,
     specializations,
     active_functions=None,
+    specialization_defs=None,
+    emit_helper=True,
 ):
     dm = re.search(
         r'nv_dispatch_call\("'
@@ -1071,6 +1497,8 @@ def inline_chunk(
         param_symbols,
         nested_specializations,
         active_functions | {name},
+        specialization_defs=None,
+        emit_helper=False,
     )
 
     return_type = infer_expr_type(
@@ -1093,17 +1521,89 @@ def inline_chunk(
         )
     )
 
-    for param, arg in zip(
-        info["params"],
-        args
-    ):
-        expr = replace_identifier(
-            expr,
-            param,
-            arg.strip()
+    native_body = lower_numeric_expr_c(
+        expr,
+        param_symbols,
+    )
+
+    if native_body is None:
+        return None
+
+    if native_body[1] != return_type:
+        return None
+
+    # --------------------------------------------------------
+    # Lors d'une analyse de preuve (while/fixed-point), garder
+    # l'ancien comportement d'inlining textuel.
+    # --------------------------------------------------------
+
+    if not emit_helper:
+        for param, arg in zip(
+            info["params"],
+            args
+        ):
+            expr = replace_identifier(
+                expr,
+                param,
+                arg.strip()
+            )
+
+        return f"({expr})"
+
+    helper_name = specialization_c_name(
+        name,
+        tuple(arg_types),
+        return_type,
+    )
+
+    if specialization_defs is not None:
+        specialization_defs.setdefault(
+            helper_name,
+            {
+                "source_name": name,
+                "params": tuple(info["params"]),
+                "arg_types": tuple(arg_types),
+                "return_type": return_type,
+                "body": native_body[0],
+            },
         )
 
-    return f"({expr})"
+    # --------------------------------------------------------
+    # Le premier C doit rester compilable AVANT la passe
+    # numérique. Les arguments sont donc convertis depuis
+    # NvVal vers leur représentation C native.
+    #
+    # Les passes suivantes reconnaîtront ces ponts et les
+    # supprimeront lorsque les arguments sont déjà natifs.
+    # --------------------------------------------------------
+
+    bridged_args = []
+
+    for arg, typ in zip(
+        args,
+        arg_types,
+    ):
+        argument = arg.strip()
+
+        if typ == "float":
+            bridged_args.append(
+                f"nv_num({argument})"
+            )
+        else:
+            bridged_args.append(
+                f"(long long)nv_num({argument})"
+            )
+
+    call = (
+        f"{helper_name}("
+        + ", ".join(bridged_args)
+        + ")"
+    )
+
+    if return_type == "float":
+        return f"nv_float({call})"
+
+    return f"nv_int({call})"
 
 
 def optimize_line(
@@ -1112,6 +1612,8 @@ def optimize_line(
     local_types,
     specializations,
     active_functions=None,
+    specialization_defs=None,
+    emit_helper=True,
 ):
     if active_functions is None:
         active_functions = set()
@@ -1128,6 +1630,8 @@ def optimize_line(
                 local_types,
                 specializations,
                 active_functions,
+                specialization_defs,
+                emit_helper,
             )
 
             if replacement is None:
@@ -1164,6 +1668,7 @@ def main():
     local_types = infer_local_types(lines)
 
     specializations = set()
+    specialization_defs = {}
 
     # --------------------------------------------------------
     # Propagation flow-sensitive des types dans main().
@@ -1322,6 +1827,8 @@ def main():
                     functions,
                     symbols,
                     scratch_specializations,
+                    specialization_defs=None,
+                    emit_helper=False,
                 )
 
                 rewritten_assignment = re.match(
@@ -1435,6 +1942,8 @@ def main():
             functions,
             effective_types,
             specializations,
+            specialization_defs=specialization_defs,
+            emit_helper=True,
         )
 
         output.append(optimized)
@@ -1552,6 +2061,108 @@ def main():
 
                 active_while_end = None
                 active_while_types = None
+
+    # --------------------------------------------------------
+    # Génération des spécialisations natives réutilisables.
+    #
+    # Heuristique initiale :
+    #   < 8 appels : laisser Clang décider ;
+    #   >= 8 appels : noinline.
+    #
+    # Ce seuil est volontairement simple et pourra être
+    # benchmarké/raffiné ultérieurement.
+    # --------------------------------------------------------
+
+    if specialization_defs:
+        output_text = "".join(output)
+
+        helper_lines = []
+
+        print(
+            "[Clariox OPT] Fonctions natives spécialisées :"
+        )
+
+        for helper_name in sorted(
+            specialization_defs
+        ):
+            info = specialization_defs[
+                helper_name
+            ]
+
+            call_count = output_text.count(
+                helper_name + "("
+            )
+
+            noinline = call_count >= 8
+
+            attribute = (
+                "__attribute__((noinline)) "
+                if noinline
+                else ""
+            )
+
+            return_ctype = numeric_c_type(
+                info["return_type"]
+            )
+
+            params = []
+
+            for param, typ in zip(
+                info["params"],
+                info["arg_types"],
+            ):
+                params.append(
+                    f"{numeric_c_type(typ)} "
+                    f"{param}"
+                )
+
+            helper_lines.extend([
+                "\n",
+                f"static {attribute}"
+                f"{return_ctype} "
+                f"{helper_name}("
+                f"{', '.join(params)}) {{\n",
+                f"    return "
+                f"{info['body']};\n",
+                "}\n",
+                "\n",
+            ])
+
+            policy = (
+                "noinline"
+                if noinline
+                else "clang"
+            )
+
+            print(
+                f"  {helper_name}: "
+                f"{call_count} appel(s), "
+                f"politique={policy}"
+            )
+
+        main_index = None
+
+        for index, generated_line in enumerate(
+            output
+        ):
+            if re.match(
+                r'\s*int\s+main\s*\(',
+                generated_line,
+            ):
+                main_index = index
+                break
+
+        if main_index is None:
+            raise RuntimeError(
+                "main() introuvable lors de "
+                "l'insertion des spécialisations natives"
+            )
+
+        output = (
+            output[:main_index]
+            + helper_lines
+            + output[main_index:]
+        )
 
     if specializations:
         print(

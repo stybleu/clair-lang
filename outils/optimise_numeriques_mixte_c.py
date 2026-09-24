@@ -334,6 +334,131 @@ def lower_flow_number(
     ):
         return expr, "double"
 
+    # --------------------------------------------------------
+    # Appel d'une spécialisation native Clariox.
+    #
+    # Les arguments possèdent encore un pont nv_num() afin que
+    # le C intermédiaire pré-optimisation reste compilable.
+    # Cette passe remplace ces ponts par les vraies expressions
+    # C natives lorsque leur type est connu.
+    # --------------------------------------------------------
+
+    specialized = re.match(
+        r'^(clariox_spec_'
+        r'[A-Za-z_][A-Za-z0-9_]*'
+        r'_to_(int|float))'
+        r'\((.*)\)$',
+        expr,
+    )
+
+    if specialized:
+        helper = specialized.group(1)
+        return_type = specialized.group(2)
+
+        raw_args = split_args(
+            specialized.group(3)
+        )
+
+        native_args = []
+
+        for raw_arg in raw_args:
+            argument = raw_arg.strip()
+
+            float_bridge = unwrap(
+                argument,
+                "nv_num",
+            )
+
+            if float_bridge is not None:
+                lowered = lower_flow_number(
+                    float_bridge,
+                    native_ints,
+                    native_floats,
+                    dynamic_types,
+                )
+
+                if lowered is None:
+                    return None
+
+                native_args.append(
+                    lowered[0]
+                )
+                continue
+
+            int_bridge = re.match(
+                r'^\(long long\)nv_num\((.*)\)$',
+                argument,
+            )
+
+            if int_bridge:
+                lowered = lower_flow_number(
+                    int_bridge.group(1),
+                    native_ints,
+                    native_floats,
+                    dynamic_types,
+                )
+
+                if lowered is None:
+                    return None
+
+                native_args.append(
+                    f"(long long)({lowered[0]})"
+                )
+                continue
+
+            return None
+
+        return (
+            f"{helper}("
+            + ", ".join(native_args)
+            + ")",
+            (
+                "double"
+                if return_type == "float"
+                else "int"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # nv_num(expr)
+    #
+    # nv_num() extrait une valeur numérique NvVal sous forme
+    # de double. Si l'expression interne est elle-même
+    # entièrement prouvée numérique, le wrapper runtime peut
+    # disparaître.
+    #
+    # Exemple :
+    #
+    #     nv_num(
+    #         nv_add(
+    #             nv_float(total),
+    #             nv_float(r0)
+    #         )
+    #     )
+    #
+    # devient :
+    #
+    #     total + r0
+    # --------------------------------------------------------
+
+    inner = unwrap(expr, "nv_num")
+
+    if inner is not None:
+        lowered = lower_flow_number(
+            inner,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if lowered is None:
+            return None
+
+        return (
+            f"(double)({lowered[0]})",
+            "double",
+        )
+
     inner = unwrap(expr, "nv_int")
 
     if inner is not None:
@@ -2383,6 +2508,147 @@ def repair(lines):
     ) = optimize_float_reboxes(
         numeric_output
     )
+
+    # --------------------------------------------------------
+    # Nettoyage final des réaffectations de double dans main().
+    #
+    # À ce stade toutes les déclarations natives créées pendant
+    # cette passe sont connues :
+    #
+    #     double r0 = ...;
+    #     double total = 0.0;
+    #
+    # Certaines réaffectations ont toutefois été produites plus
+    # tôt sous une forme encore dynamique :
+    #
+    #     total =
+    #         nv_num(
+    #             nv_add(
+    #                 nv_float(total),
+    #                 nv_float(r0)
+    #             )
+    #         );
+    #
+    # Comme total et r0 sont maintenant réellement des double C,
+    # cette dernière étape peut les abaisser sans ambiguïté.
+    #
+    # Restriction volontaire :
+    # - uniquement au niveau principal de main();
+    # - uniquement des variables déjà déclarées double/long long;
+    # - abandon immédiat si le RHS n'est pas entièrement compris.
+    # --------------------------------------------------------
+
+    def cleanup_native_main_assignments(source_lines):
+        optimized = []
+        rewritten_floats = []
+
+        in_main = False
+        depth = 0
+
+        main_native_floats = set()
+        main_native_ints = set()
+
+        for source_line in source_lines:
+            if (
+                not in_main
+                and re.match(
+                    r'^\s*int\s+main\s*\(',
+                    source_line,
+                )
+            ):
+                in_main = True
+
+            top_level_main = (
+                in_main
+                and depth == 1
+            )
+
+            if top_level_main:
+                float_decl = re.match(
+                    r'^\s*double\s+'
+                    r'([A-Za-z_][A-Za-z0-9_]*)\b',
+                    source_line,
+                )
+
+                if float_decl:
+                    main_native_floats.add(
+                        float_decl.group(1)
+                    )
+
+                int_decl = re.match(
+                    r'^\s*long long\s+'
+                    r'([A-Za-z_][A-Za-z0-9_]*)\b',
+                    source_line,
+                )
+
+                if int_decl:
+                    main_native_ints.add(
+                        int_decl.group(1)
+                    )
+
+                assignment = re.match(
+                    r'^(\s*)'
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.*?)\s*;\s*$',
+                    source_line,
+                )
+
+                if assignment:
+                    indent = assignment.group(1)
+                    name = assignment.group(2)
+                    rhs = assignment.group(3)
+
+                    if name in main_native_floats:
+                        lowered = lower_flow_number(
+                            rhs,
+                            main_native_ints,
+                            main_native_floats,
+                            {},
+                        )
+
+                        if (
+                            lowered is not None
+                            and lowered[1] == "double"
+                        ):
+                            source_line = (
+                                f"{indent}{name} = "
+                                f"{lowered[0]};\n"
+                            )
+
+                            rewritten_floats.append(
+                                name
+                            )
+
+            optimized.append(source_line)
+
+            if in_main:
+                depth += (
+                    source_line.count("{")
+                    - source_line.count("}")
+                )
+
+                if depth <= 0:
+                    in_main = False
+                    depth = 0
+
+                    main_native_floats.clear()
+                    main_native_ints.clear()
+
+        return optimized, rewritten_floats
+
+    (
+        numeric_output,
+        final_native_float_assignments,
+    ) = cleanup_native_main_assignments(
+        numeric_output
+    )
+
+    if final_native_float_assignments:
+        print(
+            "[Clariox OPT] Réaffectations double "
+            "finales simplifiées : "
+            f"{len(final_native_float_assignments)}"
+        )
 
     lines = numeric_output
 

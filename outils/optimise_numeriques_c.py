@@ -111,6 +111,94 @@ def convert_expr(expr, types):
     ):
         return expr, "int"
 
+    # Fonction native spécialisée Clariox.
+    #
+    # Forme intermédiaire :
+    #
+    #   clariox_spec_f_float_to_float(
+    #       nv_num(x)
+    #   )
+    #
+    # ou :
+    #
+    #   clariox_spec_f_int_to_int(
+    #       (long long)nv_num(x)
+    #   )
+    #
+    # Si tous les arguments peuvent être abaissés, retirer les
+    # ponts NvVal -> natif.
+    specialized = re.match(
+        r'^(clariox_spec_'
+        r'[A-Za-z_][A-Za-z0-9_]*'
+        r'_to_(int|float))'
+        r'\((.*)\)$',
+        expr,
+    )
+
+    if specialized:
+        helper = specialized.group(1)
+        return_type = specialized.group(2)
+
+        raw_args = split_args(
+            specialized.group(3)
+        )
+
+        native_args = []
+
+        for raw_arg in raw_args:
+            argument = raw_arg.strip()
+
+            float_bridge = unwrap(
+                argument,
+                "nv_num",
+            )
+
+            if float_bridge is not None:
+                lowered = convert_expr(
+                    float_bridge,
+                    types,
+                )
+
+                if lowered is None:
+                    return None
+
+                native_args.append(
+                    lowered[0]
+                )
+                continue
+
+            int_bridge = re.match(
+                r'^\(long long\)nv_num\((.*)\)$',
+                argument,
+            )
+
+            if int_bridge:
+                lowered = convert_expr(
+                    int_bridge.group(1),
+                    types,
+                )
+
+                if lowered is None:
+                    return None
+
+                native_args.append(
+                    f"(long long)({lowered[0]})"
+                )
+                continue
+
+            return None
+
+        return (
+            f"{helper}("
+            + ", ".join(native_args)
+            + ")",
+            (
+                "double"
+                if return_type == "float"
+                else "int"
+            ),
+        )
+
     # nv_int(...)
     inner = unwrap(expr, "nv_int")
     if inner is not None:
