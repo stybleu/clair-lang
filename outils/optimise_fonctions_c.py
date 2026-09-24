@@ -927,7 +927,8 @@ def inline_chunk(
     chunk,
     functions,
     local_types,
-    specializations
+    specializations,
+    active_functions=None,
 ):
     dm = re.search(
         r'nv_dispatch_call\("'
@@ -941,6 +942,22 @@ def inline_chunk(
     name = dm.group(1)
 
     if name not in functions:
+        return None
+
+    if active_functions is None:
+        active_functions = set()
+
+    # Protection contre :
+    #
+    #     A -> A
+    #
+    # mais aussi :
+    #
+    #     A -> B -> A
+    #
+    # Une fonction déjà présente dans la chaîne active n'est
+    # pas spécialisée récursivement.
+    if name in active_functions:
         return None
 
     info = functions[name]
@@ -988,13 +1005,45 @@ def inline_chunk(
         else:
             param_symbols[param] = actual
 
-    return_type = infer_expr_type(
+    # --------------------------------------------------------
+    # Optimisation interprocédurale récursive.
+    #
+    # Exemple :
+    #
+    #     fn inner(x):
+    #         return x + 1.0
+    #
+    #     fn outer(x):
+    #         return inner(x) * 2.0
+    #
+    # Pour spécialiser outer(float), il faut d'abord
+    # transformer inner(x) en expression numérique.
+    #
+    # Les spécialisations découvertes dans le corps ne sont
+    # publiées que si outer() peut finalement être spécialisé.
+    # --------------------------------------------------------
+
+    nested_specializations = set()
+
+    expr = optimize_line(
         info["expr"],
+        functions,
+        param_symbols,
+        nested_specializations,
+        active_functions | {name},
+    )
+
+    return_type = infer_expr_type(
+        expr,
         param_symbols
     )
 
     if return_type not in NUMERIC_TYPES:
         return None
+
+    specializations.update(
+        nested_specializations
+    )
 
     specializations.add(
         (
@@ -1003,8 +1052,6 @@ def inline_chunk(
             return_type
         )
     )
-
-    expr = info["expr"]
 
     for param, arg in zip(
         info["params"],
@@ -1023,8 +1070,12 @@ def optimize_line(
     line,
     functions,
     local_types,
-    specializations
+    specializations,
+    active_functions=None,
 ):
+    if active_functions is None:
+        active_functions = set()
+
     while True:
         chunks = find_call_chunks(line)
 
@@ -1035,7 +1086,8 @@ def optimize_line(
                 chunk,
                 functions,
                 local_types,
-                specializations
+                specializations,
+                active_functions,
             )
 
             if replacement is None:
