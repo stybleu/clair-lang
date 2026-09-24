@@ -1074,27 +1074,23 @@ def main():
     specializations = set()
 
     # --------------------------------------------------------
-    # Propagation avant des types numériques dans main().
+    # Propagation flow-sensitive des types dans main().
     #
-    # optimize_line() peut transformer :
+    # Une variable réaffectée ne peut pas utiliser le type
+    # calculé globalement par infer_local_types(), car ce type
+    # peut être devenu faux au point de l'appel.
     #
-    #     NvVal b = step(a);
+    # Exemple :
     #
-    # en une expression numérique entièrement connue.
+    #     a = 1
+    #     a = 2.5
+    #     only_int(a)
     #
-    # L'ancienne version calculait local_types une seule fois
-    # avant l'inlining. Le type nouvellement découvert pour b
-    # n'était donc pas disponible pour :
+    # Le type valide au dernier appel est float, pas int.
     #
-    #     c = step(b)
-    #     d = step(c)
-    #
-    # On traite désormais main() séquentiellement et on
-    # réinjecte le type d'une déclaration spécialisée dans
-    # l'environnement des lignes suivantes.
-    #
-    # Pour rester conservateur, une variable réaffectée plus
-    # tard n'est pas ajoutée par cette nouvelle propagation.
+    # Les variables réaffectées sont donc retirées de
+    # l'environnement global puis suivies dans l'ordre réel
+    # d'exécution.
     # --------------------------------------------------------
 
     reassigned_names = set()
@@ -1116,7 +1112,7 @@ def main():
             assignment = re.match(
                 r'\s*'
                 r'([A-Za-z_][A-Za-z0-9_]*)'
-                r'\s*=\s*',
+                r'\s*=\s*(.*?)\s*;\s*$',
                 source_line,
             )
 
@@ -1135,7 +1131,18 @@ def main():
                 scan_in_main = False
                 scan_depth = 0
 
+    # --------------------------------------------------------
+    # CRITIQUE :
+    # ne jamais conserver dans l'environnement global le type
+    # d'une variable qui peut être réaffectée.
+    # --------------------------------------------------------
+
+    for name in reassigned_names:
+        local_types.pop(name, None)
+
     output = []
+
+    flow_types = {}
 
     in_main = False
     main_depth = 0
@@ -1150,60 +1157,131 @@ def main():
         ):
             in_main = True
 
-        top_level_main = (
+        # Un else correspond à un autre chemin d'exécution.
+        # Sans analyse complète de fusion des branches, les
+        # informations sur les variables réaffectées sont
+        # invalidées de manière conservatrice.
+        if (
             in_main
-            and main_depth == 1
-        )
+            and re.match(
+                r'\s*else\b',
+                line,
+            )
+        ):
+            flow_types.clear()
+
+        effective_types = dict(local_types)
+
+        if in_main:
+            effective_types.update(flow_types)
 
         optimized = optimize_line(
             line,
             functions,
-            local_types,
+            effective_types,
             specializations
         )
 
         output.append(optimized)
 
-        # Une déclaration située directement dans main() peut
-        # maintenant transmettre son type aux appels suivants.
+        # ----------------------------------------------------
+        # Mise à jour de l'environnement APRES l'instruction.
         #
-        # Exemple :
-        #
-        #     a : float
-        #     b = step(a)  -> float
-        #     c = step(b)  -> float
-        #     d = step(c)  -> float
-        #
-        if top_level_main:
+        # Le RHS est évalué avec les anciens types, puis le
+        # nouveau type devient valable pour les instructions
+        # suivantes.
+        # ----------------------------------------------------
+
+        if in_main and main_depth >= 1:
+            stripped = optimized.strip()
+
             declaration = re.match(
-                r'\s*NvVal\s+'
+                r'NvVal\s+'
                 r'([A-Za-z_][A-Za-z0-9_]*)'
                 r'\s*=\s*(.+);\s*$',
-                optimized.strip(),
+                stripped,
             )
 
             if declaration:
                 name = declaration.group(1)
                 expr = declaration.group(2)
 
-                if name not in reassigned_names:
-                    inferred = infer_expr_type(
-                        expr,
-                        local_types,
-                    )
+                inferred = infer_expr_type(
+                    expr,
+                    effective_types,
+                )
 
+                if name in reassigned_names:
+                    if inferred in NUMERIC_TYPES:
+                        flow_types[name] = inferred
+                    else:
+                        flow_types.pop(
+                            name,
+                            None,
+                        )
+
+                else:
+                    # Pour une variable jamais réaffectée,
+                    # l'information est globalement sûre à
+                    # partir de sa déclaration.
                     if inferred in NUMERIC_TYPES:
                         local_types[name] = inferred
+                    else:
+                        local_types.pop(
+                            name,
+                            None,
+                        )
+
+            else:
+                assignment = re.match(
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.+);\s*$',
+                    stripped,
+                )
+
+                if assignment:
+                    name = assignment.group(1)
+
+                    if name in reassigned_names:
+                        expr = assignment.group(2)
+
+                        inferred = infer_expr_type(
+                            expr,
+                            effective_types,
+                        )
+
+                        if inferred in NUMERIC_TYPES:
+                            flow_types[name] = inferred
+                        else:
+                            flow_types.pop(
+                                name,
+                                None,
+                            )
 
         if in_main:
+            old_depth = main_depth
+
             main_depth += (
                 optimized.count("{")
                 - optimized.count("}")
             )
 
+            # Sortie d'un bloc conditionnel ou d'une boucle :
+            # le bloc a pu ne pas être exécuté. Les faits
+            # flow-sensitive deviennent donc incertains.
+            #
+            # On les abandonne plutôt que de produire du code
+            # incorrect.
+            if (
+                old_depth > 1
+                and main_depth == 1
+            ):
+                flow_types.clear()
+
             if main_depth <= 0:
                 in_main = False
                 main_depth = 0
+                flow_types.clear()
 
     if specializations:
         print(
