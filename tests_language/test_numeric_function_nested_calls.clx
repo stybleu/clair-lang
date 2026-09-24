@@ -1,0 +1,9 @@
+fn step(x: float) -> float:
+    return x + 1.0
+
+fn add(a: float, b: float) -> float:
+    return a + b
+
+result = add(step(5.0), 10.0)
+
+print(result)

@@ -1,0 +1,11 @@
+fn classify(x: float) -> float:
+    if x < 0.0:
+        return -1.0
+    elif x == 0.0:
+        return 0.0
+    else:
+        return 1.0
+
+print(classify(-5.0))
+print(classify(0.0))
+print(classify(5.0))

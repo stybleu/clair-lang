@@ -1,0 +1,9 @@
+fn adjust(x: float) -> float:
+    if input_int() > 0:
+        return x + 1.0
+    else:
+        return x - 1.0
+
+result = adjust(5.0)
+
+print(result)

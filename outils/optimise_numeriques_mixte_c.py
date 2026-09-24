@@ -103,7 +103,6 @@ def safe_c_int(expr, native_ints, dynamic_ints=None):
 
     return None
 
-
 def lower(expr, native_ints, dynamic_ints=None):
     expr = strip_outer(expr)
 
@@ -208,6 +207,45 @@ def lower(expr, native_ints, dynamic_ints=None):
 
 
 
+def split_flow_ternary(expr):
+    expr = strip_outer(expr)
+
+    depth = 0
+    question = None
+    nested = 0
+
+    for index, ch in enumerate(expr):
+        if ch == "(":
+            depth += 1
+            continue
+
+        if ch == ")":
+            depth -= 1
+            continue
+
+        if depth != 0:
+            continue
+
+        if ch == "?":
+            if question is None:
+                question = index
+                nested = 1
+            else:
+                nested += 1
+
+        elif ch == ":" and question is not None:
+            nested -= 1
+
+            if nested == 0:
+                return (
+                    expr[:question].strip(),
+                    expr[question + 1:index].strip(),
+                    expr[index + 1:].strip(),
+                )
+
+    return None
+
+
 def lower_flow_number(
     expr,
     native_ints,
@@ -220,6 +258,56 @@ def lower_flow_number(
     """
 
     expr = strip_outer(expr)
+
+    conditional = split_flow_ternary(expr)
+
+    if conditional is not None:
+        condition, yes_expr, no_expr = conditional
+
+        lowered_condition = lower_flow_condition(
+            condition,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        yes_value = lower_flow_number(
+            yes_expr,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        no_value = lower_flow_number(
+            no_expr,
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if (
+            lowered_condition is None
+            or yes_value is None
+            or no_value is None
+        ):
+            return None
+
+        result_type = (
+            "double"
+            if "double" in (
+                yes_value[1],
+                no_value[1],
+            )
+            else "int"
+        )
+
+        return (
+            f"(({strip_outer(lowered_condition)}) "
+            f"? ({yes_value[0]}) "
+            f": ({no_value[0]}))",
+            result_type,
+        )
+
 
     if expr in native_ints:
         return expr, "int"

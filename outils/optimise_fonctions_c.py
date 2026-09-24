@@ -75,8 +75,79 @@ def promote(a, b):
     return "int"
 
 
+def split_top_level_ternary(expr):
+    expr = strip_outer_parens(expr)
+
+    depth = 0
+    question = None
+    nested = 0
+
+    for index, ch in enumerate(expr):
+        if ch == "(":
+            depth += 1
+            continue
+
+        if ch == ")":
+            depth -= 1
+            continue
+
+        if depth != 0:
+            continue
+
+        if ch == "?":
+            if question is None:
+                question = index
+                nested = 1
+            else:
+                nested += 1
+
+        elif ch == ":" and question is not None:
+            nested -= 1
+
+            if nested == 0:
+                return (
+                    expr[:question].strip(),
+                    expr[question + 1:index].strip(),
+                    expr[index + 1:].strip(),
+                )
+
+    return None
+
+
 def infer_expr_type(expr, symbols):
     expr = strip_outer_parens(expr)
+
+    conditional = split_top_level_ternary(expr)
+
+    if conditional is not None:
+        condition, yes_expr, no_expr = conditional
+
+        if not infer_numeric_condition(
+            condition,
+            symbols,
+        ):
+            return None
+
+        yes_type = infer_expr_type(
+            yes_expr,
+            symbols,
+        )
+
+        no_type = infer_expr_type(
+            no_expr,
+            symbols,
+        )
+
+        if (
+            yes_type not in NUMERIC_TYPES
+            or no_type not in NUMERIC_TYPES
+        ):
+            return None
+
+        return promote(
+            yes_type,
+            no_type,
+        )
 
     if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', expr):
         return symbols.get(expr)
@@ -193,6 +264,81 @@ def infer_expr_type(expr, symbols):
     return None
 
 
+def infer_numeric_condition(expr, symbols):
+    expr = strip_outer_parens(expr)
+
+    inner = unwrap(expr, "nv_truth")
+
+    if inner is not None:
+        return infer_numeric_condition(
+            inner,
+            symbols,
+        )
+
+    for fn in ("nv_and", "nv_or"):
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return False
+
+        return (
+            infer_numeric_condition(
+                args[0],
+                symbols,
+            )
+            and
+            infer_numeric_condition(
+                args[1],
+                symbols,
+            )
+        )
+
+    inner = unwrap(expr, "nv_not")
+
+    if inner is not None:
+        return infer_numeric_condition(
+            inner,
+            symbols,
+        )
+
+    for fn in (
+        "nv_eq", "nv_ne",
+        "nv_lt", "nv_le",
+        "nv_gt", "nv_ge",
+    ):
+        inner = unwrap(expr, fn)
+
+        if inner is None:
+            continue
+
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return False
+
+        left = infer_expr_type(
+            args[0],
+            symbols,
+        )
+
+        right = infer_expr_type(
+            args[1],
+            symbols,
+        )
+
+        return (
+            left in NUMERIC_TYPES
+            and right in NUMERIC_TYPES
+        )
+
+    return False
+
+
 def replace_identifier(expr, name, value):
     return re.sub(
         rf'\b{re.escape(name)}\b',
@@ -276,6 +422,242 @@ def expand_local_expr(expr, local_defs):
     return result
 
 
+def parse_return_block(
+    block_lines,
+    inherited_defs=None,
+):
+    local_defs = dict(
+        inherited_defs or {}
+    )
+
+    return_expr = None
+
+    for line in block_lines:
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if local_match:
+            name = local_match.group(1)
+            expr = local_match.group(2)
+
+            if name in local_defs:
+                return None
+
+            local_defs[name] = expr
+            continue
+
+        return_match = re.match(
+            r'return\s+(.+);\s*$',
+            stripped,
+        )
+
+        if return_match:
+            expr = return_match.group(1)
+
+            if expr == "nv_none()":
+                continue
+
+            if return_expr is not None:
+                return None
+
+            return_expr = expr
+            continue
+
+        return None
+
+    if return_expr is None:
+        return None
+
+    return expand_local_expr(
+        return_expr,
+        local_defs,
+    )
+
+
+def collect_braced_block(lines, start_index):
+    header = lines[start_index]
+
+    depth = (
+        header.count("{")
+        - header.count("}")
+    )
+
+    if depth <= 0:
+        return None
+
+    block = []
+    index = start_index + 1
+
+    while index < len(lines):
+        current = lines[index]
+
+        next_depth = (
+            depth
+            + current.count("{")
+            - current.count("}")
+        )
+
+        if next_depth == 0:
+            return block, index
+
+        block.append(current)
+
+        depth = next_depth
+        index += 1
+
+    return None
+
+
+def parse_conditional_return(lines):
+    index = 0
+    prefix_defs = {}
+
+    def skip_blank(i):
+        while (
+            i < len(lines)
+            and not lines[i].strip()
+        ):
+            i += 1
+
+        return i
+
+    index = skip_blank(index)
+
+    # Variables numériques préparées avant le if.
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if not local_match:
+            break
+
+        name = local_match.group(1)
+
+        if name in prefix_defs:
+            return None
+
+        prefix_defs[name] = (
+            local_match.group(2)
+        )
+
+        index += 1
+        index = skip_blank(index)
+
+    if index >= len(lines):
+        return None
+
+    branches = []
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        condition_match = re.match(
+            r'^(?:if|else\s+if)'
+            r'\s*\((.*)\)\s*\{\s*$',
+            stripped,
+        )
+
+        else_match = re.match(
+            r'^else\s*\{\s*$',
+            stripped,
+        )
+
+        if condition_match:
+            condition = expand_local_expr(
+                condition_match.group(1),
+                prefix_defs,
+            )
+
+            if condition is None:
+                return None
+
+        elif else_match:
+            condition = None
+
+        else:
+            return None
+
+        collected = collect_braced_block(
+            lines,
+            index,
+        )
+
+        if collected is None:
+            return None
+
+        block, close_index = collected
+
+        branch_expr = parse_return_block(
+            block,
+            prefix_defs,
+        )
+
+        if branch_expr is None:
+            return None
+
+        branches.append(
+            (condition, branch_expr)
+        )
+
+        index = skip_blank(
+            close_index + 1
+        )
+
+        if condition is None:
+            break
+
+    # Un else final est obligatoire dans cette première
+    # version : chaque chemin doit retourner une valeur.
+    if (
+        not branches
+        or branches[-1][0] is not None
+    ):
+        return None
+
+    # Après le else, seul le return nv_none() généré par
+    # clarioxc est autorisé.
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        if not stripped:
+            index += 1
+            continue
+
+        if stripped == "return nv_none();":
+            index += 1
+            continue
+
+        return None
+
+    result = branches[-1][1]
+
+    for condition, branch_expr in reversed(
+        branches[:-1]
+    ):
+        result = (
+            f"(({condition}) "
+            f"? ({branch_expr}) "
+            f": ({result}))"
+        )
+
+    return result
+
+
 def parse_functions(lines):
     functions = {}
     i = 0
@@ -286,7 +668,7 @@ def parse_functions(lines):
             r'([A-Za-z_][A-Za-z0-9_]*)'
             r'\(NvVal \*__args, int __argc, '
             r'NvDict \*__kwargs\)\s*\{\s*$',
-            lines[i]
+            lines[i],
         )
 
         if not m:
@@ -294,34 +676,52 @@ def parse_functions(lines):
             continue
 
         name = m.group(1)
+
+        # Lecture du corps complet, y compris les blocs
+        # if/else imbriqués.
         body = []
+        depth = 1
         j = i + 1
 
         while j < len(lines):
-            if re.match(r'^\}\s*$', lines[j]):
+            current = lines[j]
+
+            next_depth = (
+                depth
+                + current.count("{")
+                - current.count("}")
+            )
+
+            if next_depth == 0:
                 break
 
-            body.append(lines[j])
+            body.append(current)
+
+            depth = next_depth
             j += 1
+
+        if depth <= 0:
+            i = j + 1
+            continue
 
         params = []
         explicit_types = {}
-        local_defs = {}
-        return_expr = None
-        safe = True
+        core = []
 
         for line in body:
             stripped = line.strip()
 
             if not stripped:
+                core.append(line)
                 continue
 
             pm = re.match(
-                r'NvVal\s+([A-Za-z_][A-Za-z0-9_]*)'
+                r'NvVal\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
                 r'\s*=\s*nv_arg\('
                 r'__args,\s*__argc,\s*__kwargs,\s*'
                 r'(\d+),\s*"([^"]+)"\s*\);',
-                stripped
+                stripped,
             )
 
             if pm:
@@ -338,71 +738,39 @@ def parse_functions(lines):
                 r'nv_expect_type\('
                 r'([A-Za-z_][A-Za-z0-9_]*),\s*'
                 r'"([^"]+)",\s*"[^"]+"\s*\);',
-                stripped
+                stripped,
             )
 
             if tm:
-                explicit_types[tm.group(1)] = tm.group(2)
+                explicit_types[
+                    tm.group(1)
+                ] = tm.group(2)
+
                 continue
 
-            local_match = re.match(
-                r'NvVal\s+'
-                r'([A-Za-z_][A-Za-z0-9_]*)'
-                r'\s*=\s*(.+);\s*$',
-                stripped
+            core.append(line)
+
+        if not params or not all(params):
+            i = j + 1
+            continue
+
+        # D'abord essayer la forme linéaire déjà supportée.
+        return_expr = parse_return_block(
+            core
+        )
+
+        # Sinon essayer un if/elif/else de retours numériques.
+        if return_expr is None:
+            return_expr = parse_conditional_return(
+                core
             )
 
-            if local_match:
-                local_name = local_match.group(1)
-                local_expr = local_match.group(2)
-
-                # Une seconde définition du même local pourrait
-                # représenter une mutation. On reste conservateur.
-                if local_name in local_defs:
-                    safe = False
-                    break
-
-                local_defs[local_name] = local_expr
-                continue
-
-            rm = re.match(
-                r'return\s+(.+);\s*$',
-                stripped
-            )
-
-            if rm:
-                expr = rm.group(1)
-
-                if expr == "nv_none()":
-                    continue
-
-                if return_expr is not None:
-                    safe = False
-                    break
-
-                return_expr = expr
-                continue
-
-            safe = False
-            break
-
-        if (
-            safe
-            and return_expr is not None
-            and params
-            and all(params)
-        ):
-            expanded_return = expand_local_expr(
-                return_expr,
-                local_defs,
-            )
-
-            if expanded_return is not None:
-                functions[name] = {
-                    "params": params,
-                    "explicit_types": explicit_types,
-                    "expr": expanded_return,
-                }
+        if return_expr is not None:
+            functions[name] = {
+                "params": params,
+                "explicit_types": explicit_types,
+                "expr": return_expr,
+            }
 
         i = j + 1
 
@@ -461,30 +829,82 @@ def infer_local_types(lines):
 
 
 def find_call_chunks(line):
+    """
+    Retourne uniquement les NvCall les plus internes.
+
+    Exemple :
+
+        print(classify(x))
+
+    produit deux blocs NvCall imbriqués. L'ancienne version
+    associait le début du NvCall externe avec la fin du NvCall
+    interne.
+
+    On spécialise maintenant les appels de l'intérieur vers
+    l'extérieur. optimize_line() relance ensuite l'analyse
+    jusqu'à stabilisation.
+    """
+
     marker = "({ NvCall __c = nv_call_new();"
     end_marker = "__r; })"
 
     result = []
+    stack = []
     pos = 0
 
-    while True:
-        start = line.find(marker, pos)
+    while pos < len(line):
+        next_start = line.find(
+            marker,
+            pos,
+        )
 
-        if start < 0:
+        next_end = line.find(
+            end_marker,
+            pos,
+        )
+
+        if next_start < 0 and next_end < 0:
             break
 
-        end = line.find(end_marker, start)
+        if (
+            next_start >= 0
+            and (
+                next_end < 0
+                or next_start < next_end
+            )
+        ):
+            if stack:
+                stack[-1]["has_child"] = True
 
-        if end < 0:
-            break
+            stack.append({
+                "start": next_start,
+                "has_child": False,
+            })
 
-        end += len(end_marker)
+            pos = next_start + len(marker)
+            continue
 
-        result.append((start, end, line[start:end]))
-        pos = end
+        if next_end >= 0:
+            end = next_end + len(end_marker)
+
+            if stack:
+                frame = stack.pop()
+
+                if not frame["has_child"]:
+                    start_pos = frame["start"]
+
+                    result.append((
+                        start_pos,
+                        end,
+                        line[start_pos:end],
+                    ))
+
+            pos = end
+            continue
+
+        break
 
     return result
-
 
 def extract_arguments(chunk):
     return re.findall(
