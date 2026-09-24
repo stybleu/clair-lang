@@ -2245,6 +2245,187 @@ def repair(lines):
     # dynamique de a.
     # --------------------------------------------------------
 
+    def optimize_specialized_call_bridges(source_lines):
+        """
+        Supprime les ponts NvVal -> natif restés dans les
+        arguments des spécialisations clariox_spec_* lorsque
+        lower_flow_number() peut prouver l'expression numérique.
+
+        Exemple :
+
+            clariox_spec_f_float_to_float(
+                nv_num(nv_float(5.0))
+            )
+
+        devient :
+
+            clariox_spec_f_float_to_float(5.0)
+
+        Cette passe ne touche pas aux wrappers NvVal entourant
+        le résultat, nécessaires par exemple pour print().
+        """
+
+        helper_pattern = re.compile(
+            r'clariox_spec_'
+            r'[A-Za-z_][A-Za-z0-9_]*'
+            r'_to_(?:int|float)\('
+        )
+
+        def find_matching_paren(source, open_index):
+            depth = 0
+
+            for index in range(
+                open_index,
+                len(source),
+            ):
+                char = source[index]
+
+                if char == "(":
+                    depth += 1
+
+                elif char == ")":
+                    depth -= 1
+
+                    if depth == 0:
+                        return index
+
+            return None
+
+        def simplify_argument(argument):
+            argument = argument.strip()
+
+            # Pont float :
+            #
+            #     nv_num(<NvVal numérique>)
+            #
+            float_bridge = unwrap(
+                argument,
+                "nv_num",
+            )
+
+            if float_bridge is not None:
+                lowered = lower_flow_number(
+                    float_bridge,
+                    set(),
+                    set(),
+                    None,
+                )
+
+                if lowered is not None:
+                    return lowered[0]
+
+                return argument
+
+            # Pont int :
+            #
+            #     (long long)nv_num(<NvVal numérique>)
+            #
+            int_bridge = re.fullmatch(
+                r'\(long long\)nv_num\((.*)\)',
+                argument,
+            )
+
+            if int_bridge:
+                lowered = lower_flow_number(
+                    int_bridge.group(1),
+                    set(),
+                    set(),
+                    None,
+                )
+
+                if lowered is not None:
+                    return (
+                        f"(long long)"
+                        f"({lowered[0]})"
+                    )
+
+            return argument
+
+        optimized_lines = []
+
+        for original_line in source_lines:
+            line = original_line
+
+            # Quelques passes suffisent aussi pour les appels
+            # spécialisés éventuellement imbriqués.
+            for _ in range(8):
+                changed = False
+                search_pos = 0
+
+                while True:
+                    match = helper_pattern.search(
+                        line,
+                        search_pos,
+                    )
+
+                    if match is None:
+                        break
+
+                    open_index = match.end() - 1
+
+                    close_index = find_matching_paren(
+                        line,
+                        open_index,
+                    )
+
+                    if close_index is None:
+                        break
+
+                    raw_arguments = line[
+                        open_index + 1:
+                        close_index
+                    ]
+
+                    arguments = split_args(
+                        raw_arguments
+                    )
+
+                    if not arguments:
+                        search_pos = close_index + 1
+                        continue
+
+                    simplified = [
+                        simplify_argument(arg)
+                        for arg in arguments
+                    ]
+
+                    if simplified != [
+                        arg.strip()
+                        for arg in arguments
+                    ]:
+                        replacement = (
+                            line[
+                                match.start():
+                                open_index + 1
+                            ]
+                            + ", ".join(simplified)
+                            + ")"
+                        )
+
+                        line = (
+                            line[:match.start()]
+                            + replacement
+                            + line[close_index + 1:]
+                        )
+
+                        changed = True
+
+                        search_pos = (
+                            match.start()
+                            + len(replacement)
+                        )
+
+                    else:
+                        search_pos = close_index + 1
+
+                if not changed:
+                    break
+
+            optimized_lines.append(line)
+
+        return optimized_lines
+
+
     def optimize_float_reboxes(source_lines):
         """
         Optimise la matérialisation des NvVal float après
@@ -2649,6 +2830,10 @@ def repair(lines):
             "finales simplifiées : "
             f"{len(final_native_float_assignments)}"
         )
+
+    numeric_output = optimize_specialized_call_bridges(
+        numeric_output
+    )
 
     lines = numeric_output
 
