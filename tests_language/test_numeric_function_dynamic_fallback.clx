@@ -1,0 +1,8 @@
+fn step(x: float) -> float:
+    if x > 0.0:
+        return x + 1.0
+    return x
+
+a = step(1.0)
+
+print(a)

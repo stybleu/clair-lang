@@ -201,6 +201,81 @@ def replace_identifier(expr, name, value):
     )
 
 
+def expand_local_expr(expr, local_defs):
+    """
+    Remplace récursivement les temporaires locaux simples par
+    leur expression d'origine.
+
+    Exemple :
+
+        y = nv_add(x, nv_float(1.0))
+        __ret3 = y
+        return __ret3
+
+    devient conceptuellement :
+
+        return nv_add(x, nv_float(1.0))
+
+    Les cycles provoquent un abandon conservateur.
+    """
+
+    def resolve_name(name, stack):
+        if name not in local_defs:
+            return name
+
+        if name in stack:
+            return None
+
+        value = local_defs[name]
+        stack = stack | {name}
+
+        identifiers = re.findall(
+            r'\b[A-Za-z_][A-Za-z0-9_]*\b',
+            value,
+        )
+
+        for dep in identifiers:
+            if dep not in local_defs:
+                continue
+
+            resolved = resolve_name(dep, stack)
+
+            if resolved is None:
+                return None
+
+            value = replace_identifier(
+                value,
+                dep,
+                resolved,
+            )
+
+        return value
+
+    result = expr
+
+    identifiers = re.findall(
+        r'\b[A-Za-z_][A-Za-z0-9_]*\b',
+        result,
+    )
+
+    for name in identifiers:
+        if name not in local_defs:
+            continue
+
+        resolved = resolve_name(name, set())
+
+        if resolved is None:
+            return None
+
+        result = replace_identifier(
+            result,
+            name,
+            resolved,
+        )
+
+    return result
+
+
 def parse_functions(lines):
     functions = {}
     i = 0
@@ -231,6 +306,7 @@ def parse_functions(lines):
 
         params = []
         explicit_types = {}
+        local_defs = {}
         return_expr = None
         safe = True
 
@@ -269,6 +345,26 @@ def parse_functions(lines):
                 explicit_types[tm.group(1)] = tm.group(2)
                 continue
 
+            local_match = re.match(
+                r'NvVal\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.+);\s*$',
+                stripped
+            )
+
+            if local_match:
+                local_name = local_match.group(1)
+                local_expr = local_match.group(2)
+
+                # Une seconde définition du même local pourrait
+                # représenter une mutation. On reste conservateur.
+                if local_name in local_defs:
+                    safe = False
+                    break
+
+                local_defs[local_name] = local_expr
+                continue
+
             rm = re.match(
                 r'return\s+(.+);\s*$',
                 stripped
@@ -296,11 +392,17 @@ def parse_functions(lines):
             and params
             and all(params)
         ):
-            functions[name] = {
-                "params": params,
-                "explicit_types": explicit_types,
-                "expr": return_expr,
-            }
+            expanded_return = expand_local_expr(
+                return_expr,
+                local_defs,
+            )
+
+            if expanded_return is not None:
+                functions[name] = {
+                    "params": params,
+                    "explicit_types": explicit_types,
+                    "expr": expanded_return,
+                }
 
         i = j + 1
 
