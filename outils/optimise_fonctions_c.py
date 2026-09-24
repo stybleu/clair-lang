@@ -1076,21 +1076,11 @@ def main():
     # --------------------------------------------------------
     # Propagation flow-sensitive des types dans main().
     #
-    # Une variable réaffectée ne peut pas utiliser le type
-    # calculé globalement par infer_local_types(), car ce type
-    # peut être devenu faux au point de l'appel.
-    #
-    # Exemple :
-    #
-    #     a = 1
-    #     a = 2.5
-    #     only_int(a)
-    #
-    # Le type valide au dernier appel est float, pas int.
-    #
-    # Les variables réaffectées sont donc retirées de
-    # l'environnement global puis suivies dans l'ordre réel
-    # d'exécution.
+    # Les variables réaffectées sont suivies dans l'ordre du
+    # programme. Les boucles while nécessitent en plus un
+    # point fixe : une information de type ne peut être
+    # utilisée dans le corps que si elle reste vraie après
+    # chaque tour possible.
     # --------------------------------------------------------
 
     reassigned_names = set()
@@ -1131,14 +1121,145 @@ def main():
                 scan_in_main = False
                 scan_depth = 0
 
-    # --------------------------------------------------------
-    # CRITIQUE :
-    # ne jamais conserver dans l'environnement global le type
-    # d'une variable qui peut être réaffectée.
-    # --------------------------------------------------------
-
+    # Une variable réaffectée ne doit jamais conserver un
+    # type provenant de l'analyse globale.
     for name in reassigned_names:
         local_types.pop(name, None)
+
+    # --------------------------------------------------------
+    # Localisation de la fin d'un bloc C {...}.
+    # --------------------------------------------------------
+
+    def find_block_end(start_index):
+        depth = (
+            lines[start_index].count("{")
+            - lines[start_index].count("}")
+        )
+
+        if depth <= 0:
+            return None
+
+        index = start_index + 1
+
+        while index < len(lines):
+            depth += (
+                lines[index].count("{")
+                - lines[index].count("}")
+            )
+
+            if depth == 0:
+                return index
+
+            index += 1
+
+        return None
+
+    # --------------------------------------------------------
+    # Point fixe des types à travers un while.
+    #
+    # candidate_types contient les types connus à l'entrée.
+    #
+    # Pour qu'un type survive :
+    #   - chaque réaffectation dans la boucle doit produire
+    #     exactement le même type ;
+    #   - cette preuve doit rester vraie après suppression des
+    #     autres candidats instables.
+    #
+    # Exemple sûr :
+    #
+    #   a:int
+    #   while ...:
+    #       a = only_int(a)
+    #
+    # Exemple non sûr :
+    #
+    #   a:int
+    #   while ...:
+    #       only_int(a)
+    #       a = 2.5
+    #
+    # Dans le second cas, a est éliminé avant l'optimisation
+    # du corps.
+    # --------------------------------------------------------
+
+    def analyze_while_fixedpoint(
+        start_index,
+        entry_flow_types,
+    ):
+        loop_end = find_block_end(start_index)
+
+        if loop_end is None:
+            return start_index, {}
+
+        candidates = dict(entry_flow_types)
+
+        while True:
+            removed = set()
+
+            symbols = dict(local_types)
+            symbols.update(candidates)
+
+            for index in range(
+                start_index + 1,
+                loop_end,
+            ):
+                current = lines[index]
+
+                assignment = re.match(
+                    r'\s*'
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.*?)\s*;\s*$',
+                    current,
+                )
+
+                if not assignment:
+                    continue
+
+                name = assignment.group(1)
+
+                if name not in candidates:
+                    continue
+
+                # Simuler l'inlining avec les types candidats,
+                # mais sans enregistrer de spécialisation
+                # définitive pendant cette phase de preuve.
+                scratch_specializations = set()
+
+                rewritten = optimize_line(
+                    current,
+                    functions,
+                    symbols,
+                    scratch_specializations,
+                )
+
+                rewritten_assignment = re.match(
+                    r'\s*'
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.*?)\s*;\s*$',
+                    rewritten,
+                )
+
+                if not rewritten_assignment:
+                    removed.add(name)
+                    continue
+
+                rhs = rewritten_assignment.group(2)
+
+                inferred = infer_expr_type(
+                    rhs,
+                    symbols,
+                )
+
+                if inferred != candidates[name]:
+                    removed.add(name)
+
+            if not removed:
+                break
+
+            for name in removed:
+                candidates.pop(name, None)
+
+        return loop_end, candidates
 
     output = []
 
@@ -1147,7 +1268,10 @@ def main():
     in_main = False
     main_depth = 0
 
-    for line in lines:
+    active_while_end = None
+    active_while_types = None
+
+    for line_index, line in enumerate(lines):
         if (
             not in_main
             and re.match(
@@ -1157,12 +1281,44 @@ def main():
         ):
             in_main = True
 
-        # Un else correspond à un autre chemin d'exécution.
-        # Sans analyse complète de fusion des branches, les
-        # informations sur les variables réaffectées sont
-        # invalidées de manière conservatrice.
+        top_level_main = (
+            in_main
+            and main_depth == 1
+        )
+
+        # ----------------------------------------------------
+        # Entrée dans un while directement situé dans main().
+        #
+        # On calcule AVANT de transformer son corps les types
+        # qui sont invariants sur le back-edge.
+        # ----------------------------------------------------
+
+        if (
+            top_level_main
+            and re.match(
+                r'\s*while\s*\(',
+                line,
+            )
+        ):
+            (
+                active_while_end,
+                active_while_types,
+            ) = analyze_while_fixedpoint(
+                line_index,
+                flow_types,
+            )
+
+        inside_active_while = (
+            active_while_end is not None
+            and line_index <= active_while_end
+        )
+
+        # Un else hors d'une boucle analysée représente un
+        # chemin différent. Sans fusion complète des branches,
+        # abandon conservateur des faits flow-sensitive.
         if (
             in_main
+            and not inside_active_while
             and re.match(
                 r'\s*else\b',
                 line,
@@ -1173,26 +1329,38 @@ def main():
         effective_types = dict(local_types)
 
         if in_main:
-            effective_types.update(flow_types)
+            if inside_active_while:
+                effective_types.update(
+                    active_while_types or {}
+                )
+            else:
+                effective_types.update(
+                    flow_types
+                )
 
         optimized = optimize_line(
             line,
             functions,
             effective_types,
-            specializations
+            specializations,
         )
 
         output.append(optimized)
 
         # ----------------------------------------------------
-        # Mise à jour de l'environnement APRES l'instruction.
+        # Hors boucle : mise à jour flow-sensitive normale.
         #
-        # Le RHS est évalué avec les anciens types, puis le
-        # nouveau type devient valable pour les instructions
-        # suivantes.
+        # Dans un while actif, on n'apprend PAS les types ligne
+        # après ligne : cela reproduirait précisément le bug du
+        # premier tour. Seul le point fixe calculé plus haut
+        # est autorisé.
         # ----------------------------------------------------
 
-        if in_main and main_depth >= 1:
+        if (
+            in_main
+            and main_depth >= 1
+            and not inside_active_while
+        ):
             stripped = optimized.strip()
 
             declaration = re.match(
@@ -1221,9 +1389,6 @@ def main():
                         )
 
                 else:
-                    # Pour une variable jamais réaffectée,
-                    # l'information est globalement sûre à
-                    # partir de sa déclaration.
                     if inferred in NUMERIC_TYPES:
                         local_types[name] = inferred
                     else:
@@ -1266,22 +1431,35 @@ def main():
                 - optimized.count("}")
             )
 
-            # Sortie d'un bloc conditionnel ou d'une boucle :
-            # le bloc a pu ne pas être exécuté. Les faits
-            # flow-sensitive deviennent donc incertains.
-            #
-            # On les abandonne plutôt que de produire du code
-            # incorrect.
+            # Fin du while : seuls les types prouvés invariants
+            # restent valables après zéro, un ou plusieurs tours.
             if (
+                active_while_end is not None
+                and line_index == active_while_end
+            ):
+                flow_types = dict(
+                    active_while_types or {}
+                )
+
+                active_while_end = None
+                active_while_types = None
+
+            elif (
                 old_depth > 1
                 and main_depth == 1
+                and active_while_end is None
             ):
+                # Sortie d'un autre bloc de contrôle.
                 flow_types.clear()
 
             if main_depth <= 0:
                 in_main = False
                 main_depth = 0
+
                 flow_types.clear()
+
+                active_while_end = None
+                active_while_types = None
 
     if specializations:
         print(
