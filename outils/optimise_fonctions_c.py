@@ -162,6 +162,46 @@ def infer_expr_type(expr, symbols):
     ):
         return "float"
 
+    # --------------------------------------------------------
+    # Types de retour garantis de certains builtins.
+    #
+    # Le générateur C représente également les builtins par un
+    # nv_dispatch_call(). Jusqu'ici, l'inférence ne savait donc
+    # pas que :
+    #
+    #     input_int(...)   -> int
+    #     input_float(...) -> float
+    #     int(...)         -> int
+    #     float(...)       -> float
+    #
+    # On n'utilise cette information que si l'expression entière
+    # correspond à UN SEUL appel dynamique. Cela évite d'inférer
+    # abusivement le type d'une expression contenant plusieurs
+    # appels imbriqués.
+    # --------------------------------------------------------
+
+    builtin_dispatches = re.findall(
+        r'nv_dispatch_call\("([^"]+)"\s*,',
+        expr,
+    )
+
+    if len(builtin_dispatches) == 1:
+        builtin_name = builtin_dispatches[0]
+
+        builtin_numeric_returns = {
+            "input_int": "int",
+            "input_float": "float",
+            "int": "int",
+            "float": "float",
+        }
+
+        builtin_type = builtin_numeric_returns.get(
+            builtin_name
+        )
+
+        if builtin_type is not None:
+            return builtin_type
+
     inner = unwrap(expr, "nv_int")
     if inner is not None:
         return "int"

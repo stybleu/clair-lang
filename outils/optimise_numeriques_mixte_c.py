@@ -783,6 +783,160 @@ def repair(lines):
                 scan_in_main = False
                 scan_depth = 0
 
+    # --------------------------------------------------------
+    # Déballage définitif d'un input_float() typé et stable.
+    #
+    # Le générateur produit :
+    #
+    #     NvVal a = <appel input_float>;
+    #     nv_expect_type(a, "float", "a");
+    #
+    # input_float() garantit lui-même un NV_FLOAT. Une variable
+    # non réaffectée peut donc franchir une seule fois la
+    # frontière NvVal -> double :
+    #
+    #     NvVal __clariox_boxed_a = <appel input_float>;
+    #     nv_expect_type(__clariox_boxed_a, "float", "a");
+    #     double a = nv_num(__clariox_boxed_a);
+    #
+    # Toutes les utilisations numériques suivantes peuvent
+    # alors travailler directement en C natif.
+    #
+    # Restriction volontaire :
+    # - uniquement directement dans main();
+    # - uniquement input_float();
+    # - uniquement une variable jamais réaffectée.
+    # --------------------------------------------------------
+
+    promoted_input_floats = []
+
+    promoted_lines = []
+
+    promote_in_main = False
+    promote_depth = 0
+
+    index = 0
+
+    while index < len(lines):
+        source_line = lines[index]
+
+        if (
+            not promote_in_main
+            and re.match(
+                r'^\s*int\s+main\s*\(',
+                source_line,
+            )
+        ):
+            promote_in_main = True
+
+        top_level_main = (
+            promote_in_main
+            and promote_depth == 1
+        )
+
+        promoted = False
+
+        if (
+            top_level_main
+            and index + 1 < len(lines)
+        ):
+            declaration = re.match(
+                r'^(\s*)NvVal\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.*?)\s*;\s*$',
+                source_line,
+            )
+
+            if declaration:
+                indent = declaration.group(1)
+                name = declaration.group(2)
+                rhs = declaration.group(3)
+
+                guard_line = lines[index + 1]
+
+                guard = re.match(
+                    r'^\s*nv_expect_type\(\s*'
+                    + re.escape(name)
+                    + r'\s*,\s*"float"\s*,\s*'
+                    r'"([^"]+)"\s*\)\s*;\s*$',
+                    guard_line,
+                )
+
+                is_input_float = (
+                    'nv_dispatch_call("input_float"'
+                    in rhs
+                )
+
+                if (
+                    guard is not None
+                    and is_input_float
+                    and name not in reassigned_names
+                ):
+                    label = guard.group(1)
+
+                    boxed_name = (
+                        "__clariox_boxed_input_float_"
+                        + name
+                    )
+
+                    promoted_lines.append(
+                        f"{indent}NvVal {boxed_name} = "
+                        f"{rhs};\n"
+                    )
+
+                    promoted_lines.append(
+                        f'{indent}nv_expect_type('
+                        f'{boxed_name}, "float", '
+                        f'"{label}");\n'
+                    )
+
+                    promoted_lines.append(
+                        f"{indent}double {name} = "
+                        f"nv_num({boxed_name});\n"
+                    )
+
+                    promoted_input_floats.append(
+                        name
+                    )
+
+                    # La ligne nv_expect_type originale est
+                    # absorbée par la transformation.
+                    index += 2
+                    promoted = True
+
+        if not promoted:
+            promoted_lines.append(
+                source_line
+            )
+
+            if promote_in_main:
+                promote_depth += (
+                    source_line.count("{")
+                    - source_line.count("}")
+                )
+
+                if promote_depth <= 0:
+                    promote_in_main = False
+                    promote_depth = 0
+
+            index += 1
+
+    lines = promoted_lines
+
+    # La nouvelle déclaration "double a" doit être visible
+    # immédiatement par les passes numériques suivantes.
+    discover_native_types(lines)
+
+    if promoted_input_floats:
+        print(
+            "[Clariox OPT] input_float déballés en double :"
+        )
+
+        for name in sorted(
+            set(promoted_input_floats)
+        ):
+            print(f"  {name}")
+
     flow_numeric_types = {}
     flow_float_specialized = []
     flow_float_loop_rewritten = []
