@@ -777,6 +777,24 @@ def parse_linear_native_body(block_lines):
     if return_expr is None:
         return None
 
+    # Le générateur C crée souvent un temporaire artificiel :
+    #
+    #     NvVal __ret7 = z;
+    #     return __ret7;
+    #
+    # Dans un helper natif linéaire, cette copie intermédiaire
+    # n'apporte rien. Si le dernier local est exactement ce
+    # temporaire de retour, retourner directement son expression.
+    if (
+        locals_list
+        and re.fullmatch(
+            r'__ret\d+',
+            return_expr,
+        )
+        and locals_list[-1][0] == return_expr
+    ):
+        _, return_expr = locals_list.pop()
+
     return {
         "locals": locals_list,
         "return": return_expr,
