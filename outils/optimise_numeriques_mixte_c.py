@@ -1429,6 +1429,96 @@ def repair(lines):
     active_while_unbox = {}
     while_unbox_counter = 0
 
+    # --------------------------------------------------------
+    # Variables float réaffectées mais invariantes en type.
+    #
+    # Une variable comme :
+    #
+    #     total = 0.0
+    #     total = total + r0
+    #     total = total + r1
+    #
+    # peut rester un double C natif si CHAQUE réaffectation
+    # linéaire est prouvée double.
+    #
+    # Les structures de contrôle restent volontairement des
+    # barrières pour cette première version.
+    # --------------------------------------------------------
+
+    linear_native_reassigned_floats = set()
+
+    def can_promote_linear_reassigned_float(
+        start_index,
+        name,
+    ):
+        candidate_types = {
+            name: "double",
+        }
+
+        depth = 1
+        saw_assignment = False
+        index = start_index + 1
+
+        while index < len(lines):
+            current = lines[index]
+            stripped_current = current.strip()
+
+            # Sortie de main().
+            if (
+                depth == 1
+                and stripped_current == "}"
+            ):
+                break
+
+            # Une structure de contrôle exige une analyse de
+            # flot plus complexe. Abandon conservateur.
+            if (
+                depth == 1
+                and re.match(
+                    r'^(?:if|else(?:\s+if)?|while|for|switch)\b',
+                    stripped_current,
+                )
+            ):
+                return False
+
+            if depth == 1:
+                assignment = re.match(
+                    r'^\s*'
+                    + re.escape(name)
+                    + r'\s*=\s*(.*?)\s*;\s*$',
+                    current,
+                )
+
+                if assignment:
+                    rhs = assignment.group(1)
+
+                    lowered = lower_flow_number(
+                        rhs,
+                        native_ints,
+                        native_floats,
+                        candidate_types,
+                    )
+
+                    if (
+                        lowered is None
+                        or lowered[1] != "double"
+                    ):
+                        return False
+
+                    saw_assignment = True
+
+            depth += (
+                current.count("{")
+                - current.count("}")
+            )
+
+            if depth <= 0:
+                break
+
+            index += 1
+
+        return saw_assignment
+
     for flow_line_index, source_line in enumerate(lines):
         if (
             not flow_in_main
@@ -1822,11 +1912,44 @@ def repair(lines):
                     )
 
                 elif name in reassigned_names:
-                    # Le type est connu à cet instant,
-                    # mais la variable doit rester NvVal.
-                    flow_numeric_types[name] = (
-                        lowered[1]
-                    )
+                    # Une variable réaffectée reste normalement
+                    # NvVal. Exception : si elle démarre en
+                    # double et que toutes ses réaffectations
+                    # linéaires sont elles aussi prouvées
+                    # double, elle peut rester native.
+                    if (
+                        lowered[1] == "double"
+                        and can_promote_linear_reassigned_float(
+                            flow_line_index,
+                            name,
+                        )
+                    ):
+                        source_line = (
+                            f"{indent}double {name} = "
+                            f"{lowered[0]};\n"
+                        )
+
+                        native_floats.add(name)
+
+                        linear_native_reassigned_floats.add(
+                            name
+                        )
+
+                        flow_numeric_types.pop(
+                            name,
+                            None,
+                        )
+
+                        flow_float_specialized.append(
+                            name
+                        )
+
+                    else:
+                        # Type connu localement, mais
+                        # représentation NvVal conservée.
+                        flow_numeric_types[name] = (
+                            lowered[1]
+                        )
 
                 elif lowered[1] == "double":
                     source_line = (
@@ -1852,35 +1975,63 @@ def repair(lines):
 
             else:
                 assignment = re.match(
-                    r'^\s*([A-Za-z_][A-Za-z0-9_]*)'
+                    r'^(\s*)'
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
                     r'\s*=\s*(.*?)\s*;\s*$',
                     source_line,
                 )
 
-                if (
-                    assignment
-                    and assignment.group(1)
-                    in flow_numeric_types
-                ):
-                    name = assignment.group(1)
-                    rhs = assignment.group(2)
+                if assignment:
+                    assignment_indent = assignment.group(1)
+                    name = assignment.group(2)
+                    rhs = assignment.group(3)
 
-                    lowered = lower_flow_number(
-                        rhs,
-                        native_ints,
-                        native_floats,
-                        flow_numeric_types,
-                    )
+                    if (
+                        name
+                        in linear_native_reassigned_floats
+                    ):
+                        lowered = lower_flow_number(
+                            rhs,
+                            native_ints,
+                            native_floats,
+                            flow_numeric_types,
+                        )
 
-                    if lowered is None:
-                        flow_numeric_types.pop(
-                            name,
-                            None,
+                        # Cette propriété a déjà été prouvée
+                        # par can_promote_linear_reassigned_float().
+                        # Garder malgré tout une vérification
+                        # conservatrice.
+                        if (
+                            lowered is not None
+                            and lowered[1] == "double"
+                        ):
+                            source_line = (
+                                f"{assignment_indent}"
+                                f"{name} = "
+                                f"{lowered[0]};\n"
+                            )
+
+                            stripped = (
+                                source_line.strip()
+                            )
+
+                    elif name in flow_numeric_types:
+                        lowered = lower_flow_number(
+                            rhs,
+                            native_ints,
+                            native_floats,
+                            flow_numeric_types,
                         )
-                    else:
-                        flow_numeric_types[name] = (
-                            lowered[1]
-                        )
+
+                        if lowered is None:
+                            flow_numeric_types.pop(
+                                name,
+                                None,
+                            )
+                        else:
+                            flow_numeric_types[name] = (
+                                lowered[1]
+                            )
 
         numeric_output.append(source_line)
 
