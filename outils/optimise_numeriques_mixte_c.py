@@ -2567,7 +2567,27 @@ def repair(lines):
                 line
             )
 
-            if declaration:
+            # Cette spécialisation flow-sensitive concerne
+            # uniquement main().
+            #
+            # Les fonctions génériques Clariox retournent NvVal.
+            # Transformer un temporaire local comme :
+            #
+            #     NvVal __ret3 = nv_int(1LL);
+            #
+            # en :
+            #
+            #     long long __ret3 = 1LL;
+            #
+            # rendrait ensuite :
+            #
+            #     return __ret3;
+            #
+            # invalide dans une fonction retournant NvVal.
+            #
+            # Les fonctions spécialisées sont déjà optimisées
+            # par optimise_fonctions_c.py avant cette passe.
+            if declaration and in_main:
                 indent, name, rhs = (
                     declaration.group(1),
                     declaration.group(2),
