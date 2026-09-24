@@ -699,6 +699,156 @@ def parse_conditional_return(lines):
 
 
 
+
+def parse_conditional_native_body(lines):
+    """
+    Conserve la structure d'un if / else if / else numérique.
+
+    L'inférence générale continue d'utiliser
+    parse_conditional_return(), qui fabrique une expression
+    conditionnelle.
+
+    Cette représentation sert uniquement à générer un helper C
+    natif structuré avec de vrais if / else if / else.
+    """
+
+    index = 0
+    prefix_defs = {}
+
+    def skip_blank(i):
+        while (
+            i < len(lines)
+            and not lines[i].strip()
+        ):
+            i += 1
+
+        return i
+
+    index = skip_blank(index)
+
+    # Variables numériques préparées avant le if.
+    # Pour cette première version, elles sont développées dans
+    # les conditions/retours comme dans parse_conditional_return.
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if not local_match:
+            break
+
+        name = local_match.group(1)
+
+        if name in prefix_defs:
+            return None
+
+        prefix_defs[name] = local_match.group(2)
+
+        index += 1
+        index = skip_blank(index)
+
+    if index >= len(lines):
+        return None
+
+    branches = []
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        condition_match = re.match(
+            r'^(?:if|else\s+if)'
+            r'\s*\((.*)\)\s*\{\s*$',
+            stripped,
+        )
+
+        else_match = re.match(
+            r'^else\s*\{\s*$',
+            stripped,
+        )
+
+        if condition_match:
+            condition = expand_local_expr(
+                condition_match.group(1),
+                prefix_defs,
+            )
+
+            if condition is None:
+                return None
+
+        elif else_match:
+            # Un else sans if précédent n'est pas une structure
+            # conditionnelle valide pour notre helper natif.
+            if not branches:
+                return None
+
+            condition = None
+
+        else:
+            return None
+
+        collected = collect_braced_block(
+            lines,
+            index,
+        )
+
+        if collected is None:
+            return None
+
+        block, close_index = collected
+
+        # Pour cette V1 structurée, on réutilise exactement le
+        # parseur de retour déjà éprouvé. Les locaux propres à
+        # la branche sont donc encore développés dans son
+        # expression de retour.
+        branch_expr = parse_return_block(
+            block,
+            prefix_defs,
+        )
+
+        if branch_expr is None:
+            return None
+
+        branches.append(
+            (condition, branch_expr)
+        )
+
+        index = skip_blank(
+            close_index + 1
+        )
+
+        if condition is None:
+            break
+
+    # Tous les chemins doivent retourner : else final obligatoire.
+    if (
+        not branches
+        or branches[-1][0] is not None
+    ):
+        return None
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        if not stripped:
+            index += 1
+            continue
+
+        if stripped == "return nv_none();":
+            index += 1
+            continue
+
+        return None
+
+    return {
+        "branches": branches,
+    }
+
+
 def parse_linear_native_body(block_lines):
     """
     Conserve la structure d'une fonction numérique linéaire.
@@ -906,6 +1056,8 @@ def parse_functions(lines):
             )
         )
 
+        conditional_native_body = None
+
         # D'abord essayer la forme linéaire déjà supportée.
         return_expr = parse_return_block(
             core
@@ -913,6 +1065,12 @@ def parse_functions(lines):
 
         # Sinon essayer un if/elif/else de retours numériques.
         if return_expr is None:
+            conditional_native_body = (
+                parse_conditional_native_body(
+                    core
+                )
+            )
+
             return_expr = parse_conditional_return(
                 core
             )
@@ -923,6 +1081,9 @@ def parse_functions(lines):
                 "explicit_types": explicit_types,
                 "expr": return_expr,
                 "linear_native_body": linear_native_body,
+                "conditional_native_body": (
+                    conditional_native_body
+                ),
             }
 
         i = j + 1
@@ -1309,6 +1470,36 @@ def lower_numeric_expr_c(
     inner = unwrap(expr, "nv_float")
 
     if inner is not None:
+        literal = strip_outer_parens(
+            inner
+        )
+
+        # Un littéral décimal est déjà un double C.
+        # Éviter de générer :
+        #
+        #     (double)(0.0)
+        #
+        # car certaines passes de simplification de conditions
+        # peuvent ensuite le déformer en :
+        #
+        #     double(0.0)
+        #
+        # qui est du C invalide.
+        if re.fullmatch(
+            r'-?(?:\d+\.\d*|\d*\.\d+)'
+            r'(?:[eE][+-]?\d+)?',
+            literal,
+        ):
+            return literal, "float"
+
+        # nv_float(1) doit également être considéré comme float,
+        # même si la représentation C peut rester 1.0.
+        if re.fullmatch(
+            r'-?\d+',
+            literal,
+        ):
+            return f"{literal}.0", "float"
+
         lowered = lower_numeric_expr_c(
             inner,
             symbols,
@@ -1622,6 +1813,158 @@ def build_native_linear_helper(
     }
 
 
+
+def build_native_conditional_helper(
+    info,
+    functions,
+    param_symbols,
+    active_functions,
+):
+    """
+    Produit un corps C structuré pour :
+
+        if (...) {
+            return ...;
+        } else if (...) {
+            return ...;
+        } else {
+            return ...;
+        }
+
+    La fonction générique NvVal reste inchangée.
+    """
+
+    structured = info.get(
+        "conditional_native_body"
+    )
+
+    if structured is None:
+        return None
+
+    symbols = dict(param_symbols)
+    scratch_specializations = set()
+
+    body_lines = []
+    branch_types = []
+
+    branches = structured["branches"]
+
+    for branch_index, (
+        raw_condition,
+        raw_return,
+    ) in enumerate(branches):
+
+        # ----------------------------------------------
+        # Expression retournée par la branche.
+        # ----------------------------------------------
+
+        rewritten_return = optimize_line(
+            raw_return,
+            functions,
+            symbols,
+            scratch_specializations,
+            active_functions,
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        lowered_return = lower_numeric_expr_c(
+            rewritten_return,
+            symbols,
+        )
+
+        if lowered_return is None:
+            return None
+
+        branch_types.append(
+            lowered_return[1]
+        )
+
+        # ----------------------------------------------
+        # else final.
+        # ----------------------------------------------
+
+        if raw_condition is None:
+            if branch_index == 0:
+                return None
+
+            body_lines.append(
+                "    else {\n"
+            )
+
+            body_lines.append(
+                f"        return "
+                f"{lowered_return[0]};\n"
+            )
+
+            body_lines.append(
+                "    }\n"
+            )
+
+            continue
+
+        # ----------------------------------------------
+        # if / else if.
+        # ----------------------------------------------
+
+        rewritten_condition = optimize_line(
+            raw_condition,
+            functions,
+            symbols,
+            scratch_specializations,
+            active_functions,
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        lowered_condition = (
+            lower_numeric_condition_c(
+                rewritten_condition,
+                symbols,
+            )
+        )
+
+        if lowered_condition is None:
+            return None
+
+        keyword = (
+            "if"
+            if branch_index == 0
+            else "else if"
+        )
+
+        body_lines.append(
+            f"    {keyword} "
+            f"({lowered_condition}) {{\n"
+        )
+
+        body_lines.append(
+            f"        return "
+            f"{lowered_return[0]};\n"
+        )
+
+        body_lines.append(
+            "    }\n"
+        )
+
+    if not branch_types:
+        return None
+
+    result_type = branch_types[0]
+
+    for branch_type in branch_types[1:]:
+        result_type = promote(
+            result_type,
+            branch_type,
+        )
+
+    return {
+        "lines": body_lines,
+        "return_type": result_type,
+        "terminal_returns": True,
+    }
+
+
 def inline_chunk(
     chunk,
     functions,
@@ -1779,12 +2122,28 @@ def inline_chunk(
         ),
     )
 
+    structured_terminal_returns = False
+
+    if structured_helper is None:
+        structured_helper = (
+            build_native_conditional_helper(
+                info,
+                functions,
+                param_symbols,
+                active_functions | {name},
+            )
+        )
+
+        if structured_helper is not None:
+            structured_terminal_returns = True
+
     if (
         structured_helper is not None
         and structured_helper["return_type"]
         != return_type
     ):
         structured_helper = None
+        structured_terminal_returns = False
 
     # --------------------------------------------------------
     # Lors d'une analyse de preuve (while/fixed-point), garder
@@ -1825,9 +2184,17 @@ def inline_chunk(
                     else None
                 ),
                 "return_expr": (
-                    structured_helper["return_expr"]
+                    structured_helper.get(
+                        "return_expr",
+                        native_body[0],
+                    )
                     if structured_helper is not None
                     else native_body[0]
+                ),
+                "terminal_returns": (
+                    structured_terminal_returns
+                    if structured_helper is not None
+                    else False
                 ),
             },
         )
@@ -2393,9 +2760,16 @@ def main():
                     info["body_lines"]
                 )
 
+            if not info.get(
+                "terminal_returns",
+                False,
+            ):
+                helper_lines.append(
+                    f"    return "
+                    f"{info.get('return_expr', info['body'])};\n"
+                )
+
             helper_lines.extend([
-                f"    return "
-                f"{info.get('return_expr', info['body'])};\n",
                 "}\n",
                 "\n",
             ])
