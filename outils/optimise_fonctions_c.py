@@ -698,6 +698,91 @@ def parse_conditional_return(lines):
     return result
 
 
+
+def parse_linear_native_body(block_lines):
+    """
+    Conserve la structure d'une fonction numérique linéaire.
+
+    Exemple Clariox :
+
+        y = x * 2.0
+        z = y + 3.0
+        return z
+
+    devient une représentation structurée :
+
+        locals = [
+            ("y", ...),
+            ("z", ...),
+        ]
+        return = "z"
+
+    Toute structure de contrôle ou réaffectation complexe
+    provoque un abandon conservateur.
+    """
+
+    locals_list = []
+    known_names = set()
+    return_expr = None
+
+    for line in block_lines:
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if local_match:
+            name = local_match.group(1)
+            expr = local_match.group(2)
+
+            if name in known_names:
+                return None
+
+            known_names.add(name)
+
+            locals_list.append(
+                (name, expr)
+            )
+
+            continue
+
+        return_match = re.match(
+            r'return\s+(.+);\s*$',
+            stripped,
+        )
+
+        if return_match:
+            expr = return_match.group(1)
+
+            if expr == "nv_none()":
+                continue
+
+            if return_expr is not None:
+                return None
+
+            return_expr = expr
+            continue
+
+        # if / while / affectation / appel non représentable :
+        # garder l'ancien mécanisme basé sur l'expression.
+        return None
+
+    if return_expr is None:
+        return None
+
+    return {
+        "locals": locals_list,
+        "return": return_expr,
+    }
+
+
 def parse_functions(lines):
     functions = {}
     i = 0
@@ -794,6 +879,15 @@ def parse_functions(lines):
             i = j + 1
             continue
 
+        # Conserver également la structure linéaire originale.
+        # parse_return_block() continue à fournir l'expression
+        # complètement développée nécessaire à l'inférence.
+        linear_native_body = (
+            parse_linear_native_body(
+                core
+            )
+        )
+
         # D'abord essayer la forme linéaire déjà supportée.
         return_expr = parse_return_block(
             core
@@ -810,6 +904,7 @@ def parse_functions(lines):
                 "params": params,
                 "explicit_types": explicit_types,
                 "expr": return_expr,
+                "linear_native_body": linear_native_body,
             }
 
         i = j + 1
@@ -1387,6 +1482,128 @@ def lower_numeric_expr_c(
     return None
 
 
+
+def build_native_linear_helper(
+    info,
+    functions,
+    param_symbols,
+    active_functions,
+    helper_name,
+):
+    """
+    Produit le corps C natif structuré d'une fonction linéaire.
+
+    Les appels numériques interprocéduraux restent développés
+    à l'intérieur du helper pour cette première version.
+    """
+
+    structured = info.get(
+        "linear_native_body"
+    )
+
+    if structured is None:
+        return None
+
+    symbols = dict(param_symbols)
+    body_lines = []
+
+    # Les noms des variables locales d'un helper natif ne
+    # doivent jamais entrer en collision avec les NvVal du
+    # fallback générique.
+    native_local_names = {}
+
+    scratch_specializations = set()
+
+    for local_index, (name, raw_expr) in enumerate(
+        structured["locals"]
+    ):
+        rewritten_source = raw_expr
+
+        # Remplacer les références aux locaux précédents par
+        # leurs noms C privés au helper.
+        for original_name, native_name in (
+            native_local_names.items()
+        ):
+            rewritten_source = replace_identifier(
+                rewritten_source,
+                original_name,
+                native_name,
+            )
+
+        rewritten = optimize_line(
+            rewritten_source,
+            functions,
+            symbols,
+            scratch_specializations,
+            active_functions,
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        lowered = lower_numeric_expr_c(
+            rewritten,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        c_type = numeric_c_type(
+            lowered[1]
+        )
+
+        if c_type is None:
+            return None
+
+        safe_local_name = (
+            f"__{helper_name}_local_"
+            f"{local_index}_{name}"
+        )
+
+        body_lines.append(
+            f"    {c_type} {safe_local_name} = "
+            f"{lowered[0]};\n"
+        )
+
+        native_local_names[name] = safe_local_name
+        symbols[safe_local_name] = lowered[1]
+
+    return_source = structured["return"]
+
+    for original_name, native_name in (
+        native_local_names.items()
+    ):
+        return_source = replace_identifier(
+            return_source,
+            original_name,
+            native_name,
+        )
+
+    rewritten_return = optimize_line(
+        return_source,
+        functions,
+        symbols,
+        scratch_specializations,
+        active_functions,
+        specialization_defs=None,
+        emit_helper=False,
+    )
+
+    lowered_return = lower_numeric_expr_c(
+        rewritten_return,
+        symbols,
+    )
+
+    if lowered_return is None:
+        return None
+
+    return {
+        "lines": body_lines,
+        "return_expr": lowered_return[0],
+        "return_type": lowered_return[1],
+    }
+
+
 def inline_chunk(
     chunk,
     functions,
@@ -1532,6 +1749,25 @@ def inline_chunk(
     if native_body[1] != return_type:
         return None
 
+    structured_helper = build_native_linear_helper(
+        info,
+        functions,
+        param_symbols,
+        active_functions | {name},
+        specialization_c_name(
+            name,
+            tuple(arg_types),
+            return_type,
+        ),
+    )
+
+    if (
+        structured_helper is not None
+        and structured_helper["return_type"]
+        != return_type
+    ):
+        structured_helper = None
+
     # --------------------------------------------------------
     # Lors d'une analyse de preuve (while/fixed-point), garder
     # l'ancien comportement d'inlining textuel.
@@ -1565,6 +1801,16 @@ def inline_chunk(
                 "arg_types": tuple(arg_types),
                 "return_type": return_type,
                 "body": native_body[0],
+                "body_lines": (
+                    structured_helper["lines"]
+                    if structured_helper is not None
+                    else None
+                ),
+                "return_expr": (
+                    structured_helper["return_expr"]
+                    if structured_helper is not None
+                    else native_body[0]
+                ),
             },
         )
 
@@ -2122,8 +2368,16 @@ def main():
                 f"{return_ctype} "
                 f"{helper_name}("
                 f"{', '.join(params)}) {{\n",
+            ])
+
+            if info.get("body_lines"):
+                helper_lines.extend(
+                    info["body_lines"]
+                )
+
+            helper_lines.extend([
                 f"    return "
-                f"{info['body']};\n",
+                f"{info.get('return_expr', info['body'])};\n",
                 "}\n",
                 "\n",
             ])
