@@ -1112,31 +1112,58 @@ def repair(lines):
                     current,
                 )
 
-                # print(a), appel(a), condition sur a, etc.
-                if not assignment:
-                    return {}
+                if assignment:
+                    target = assignment.group(1)
+                    rhs = assignment.group(2)
 
-                target = assignment.group(1)
-                rhs = assignment.group(2)
+                    # Une valeur déballée ne peut alimenter
+                    # que les autres valeurs déballées de la
+                    # même boucle.
+                    if target not in names:
+                        return {}
 
-                # Pour cette première version, une valeur
-                # déballée ne peut alimenter que les autres
-                # valeurs déballées de la même boucle.
-                if target not in names:
-                    return {}
+                    lowered = lower_flow_number(
+                        rhs,
+                        native_ints,
+                        native_floats,
+                        invariants,
+                    )
 
-                lowered = lower_flow_number(
-                    rhs,
-                    native_ints,
-                    native_floats,
-                    invariants,
-                )
+                    if (
+                        lowered is None
+                        or lowered[1] != "double"
+                    ):
+                        return {}
 
-                if (
-                    lowered is None
-                    or lowered[1] != "double"
-                ):
-                    return {}
+                else:
+                    # ------------------------------------------------
+                    # Autoriser une condition IF / ELSE IF interne si
+                    # elle est entièrement numérique et abaissable.
+                    # ------------------------------------------------
+
+                    condition_match = re.match(
+                        r'^\s*'
+                        r'(?:if|else\s+if)'
+                        r'\s*\((.*)\)\s*\{\s*$',
+                        current.rstrip("\n"),
+                    )
+
+                    if condition_match:
+                        lowered_condition = (
+                            lower_flow_condition(
+                                condition_match.group(1),
+                                native_ints,
+                                native_floats,
+                                invariants,
+                            )
+                        )
+
+                        if lowered_condition is None:
+                            return {}
+
+                    else:
+                        # print(a), appel(a), return a, etc.
+                        return {}
 
             index += 1
 
@@ -1273,6 +1300,83 @@ def repair(lines):
                             )
 
                         stripped = source_line.strip()
+
+        # ----------------------------------------------------
+        # Conditions numériques imbriquées.
+        #
+        # Le traitement top-level ci-dessous optimise déjà les
+        # if/elif directement dans main().
+        #
+        # Ici on traite les conditions situées dans un bloc
+        # imbriqué, notamment :
+        #
+        #     while (...):
+        #         if (...):
+        #
+        # lower_flow_condition() reste conservateur :
+        # un appel dynamique ou une expression inconnue
+        # entraîne simplement l'abandon de cette réécriture.
+        # ----------------------------------------------------
+
+        if (
+            flow_in_main
+            and flow_depth >= 2
+            and re.match(
+                r'^(?:if|else\s+if)\s*\(',
+                stripped,
+            )
+        ):
+            nested_entry_types = {}
+
+            if (
+                pending_while_end is not None
+                and pending_while_types is not None
+                and flow_line_index <= pending_while_end
+            ):
+                nested_entry_types = (
+                    pending_while_types
+                )
+
+            nested_match = re.match(
+                r'^(\s*)'
+                r'(if|else\s+if)'
+                r'\s*\((.*)\)\s*\{\s*$',
+                source_line.rstrip("\n"),
+            )
+
+            if nested_match:
+                nested_condition = lower_flow_condition(
+                    nested_match.group(3),
+                    native_ints,
+                    native_floats,
+                    nested_entry_types,
+                )
+
+                if nested_condition is not None:
+                    # Si la boucle possède des temporaires
+                    # locaux unboxés, utiliser directement
+                    # ces double à la place des NvVal.
+                    for (
+                        original_name,
+                        native_name,
+                    ) in active_while_unbox.items():
+                        nested_condition = re.sub(
+                            rf'nv_num\(\s*'
+                            rf'{re.escape(original_name)}'
+                            rf'\s*\)',
+                            native_name,
+                            nested_condition,
+                        )
+
+                    source_line = (
+                        f"{nested_match.group(1)}"
+                        f"{nested_match.group(2)} "
+                        f"({strip_outer(nested_condition)}) "
+                        f"{{\n"
+                    )
+
+                    stripped = source_line.strip()
+                    flow_float_if_conditions += 1
 
         if (
             top_level_main

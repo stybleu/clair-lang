@@ -1,0 +1,12 @@
+a = 0.0
+total = 0.0
+
+while a < 10.0:
+    if a < 5.0:
+        total = total + 1.0
+    else:
+        total = total + 2.0
+
+    a = a + 1.0
+
+print(total)
