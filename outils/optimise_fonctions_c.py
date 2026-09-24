@@ -1073,15 +1073,137 @@ def main():
 
     specializations = set()
 
-    output = [
-        optimize_line(
+    # --------------------------------------------------------
+    # Propagation avant des types numériques dans main().
+    #
+    # optimize_line() peut transformer :
+    #
+    #     NvVal b = step(a);
+    #
+    # en une expression numérique entièrement connue.
+    #
+    # L'ancienne version calculait local_types une seule fois
+    # avant l'inlining. Le type nouvellement découvert pour b
+    # n'était donc pas disponible pour :
+    #
+    #     c = step(b)
+    #     d = step(c)
+    #
+    # On traite désormais main() séquentiellement et on
+    # réinjecte le type d'une déclaration spécialisée dans
+    # l'environnement des lignes suivantes.
+    #
+    # Pour rester conservateur, une variable réaffectée plus
+    # tard n'est pas ajoutée par cette nouvelle propagation.
+    # --------------------------------------------------------
+
+    reassigned_names = set()
+
+    scan_in_main = False
+    scan_depth = 0
+
+    for source_line in lines:
+        if (
+            not scan_in_main
+            and re.match(
+                r'\s*int\s+main\s*\(',
+                source_line,
+            )
+        ):
+            scan_in_main = True
+
+        if scan_in_main and scan_depth >= 1:
+            assignment = re.match(
+                r'\s*'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*',
+                source_line,
+            )
+
+            if assignment:
+                reassigned_names.add(
+                    assignment.group(1)
+                )
+
+        if scan_in_main:
+            scan_depth += (
+                source_line.count("{")
+                - source_line.count("}")
+            )
+
+            if scan_depth <= 0:
+                scan_in_main = False
+                scan_depth = 0
+
+    output = []
+
+    in_main = False
+    main_depth = 0
+
+    for line in lines:
+        if (
+            not in_main
+            and re.match(
+                r'\s*int\s+main\s*\(',
+                line,
+            )
+        ):
+            in_main = True
+
+        top_level_main = (
+            in_main
+            and main_depth == 1
+        )
+
+        optimized = optimize_line(
             line,
             functions,
             local_types,
             specializations
         )
-        for line in lines
-    ]
+
+        output.append(optimized)
+
+        # Une déclaration située directement dans main() peut
+        # maintenant transmettre son type aux appels suivants.
+        #
+        # Exemple :
+        #
+        #     a : float
+        #     b = step(a)  -> float
+        #     c = step(b)  -> float
+        #     d = step(c)  -> float
+        #
+        if top_level_main:
+            declaration = re.match(
+                r'\s*NvVal\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.+);\s*$',
+                optimized.strip(),
+            )
+
+            if declaration:
+                name = declaration.group(1)
+                expr = declaration.group(2)
+
+                if name not in reassigned_names:
+                    inferred = infer_expr_type(
+                        expr,
+                        local_types,
+                    )
+
+                    if inferred in NUMERIC_TYPES:
+                        local_types[name] = inferred
+
+        if in_main:
+            main_depth += (
+                optimized.count("{")
+                - optimized.count("}")
+            )
+
+            if main_depth <= 0:
+                in_main = False
+                main_depth = 0
 
     if specializations:
         print(
