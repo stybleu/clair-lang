@@ -1113,6 +1113,303 @@ def parse_conditional_native_body(lines):
 
 
 
+
+def parse_native_branch_flow_body(lines):
+    """
+    Analyse un flot numérique de fonction contenant un ou
+    plusieurs if / else successifs suivis d'un return final.
+
+    Exemple :
+
+        NvVal value = nv_none();
+
+        if (...) {
+            value = nv_int(10);
+        }
+        else {
+            value = nv_int(20);
+        }
+
+        NvVal __ret = value;
+        return __ret;
+
+    Les variables déclarées à nv_none() sont considérées comme
+    "hoisted" : elles ne deviennent utilisables après un point
+    de jonction que si toutes les branches leur donnent une
+    valeur.
+    """
+
+    index = 0
+
+    prefix_locals = []
+    hoisted_names = []
+    known_names = set()
+
+    operations = []
+    return_expr = None
+    saw_branch = False
+
+    def skip_blank(i):
+        while (
+            i < len(lines)
+            and not lines[i].strip()
+        ):
+            i += 1
+
+        return i
+
+    index = skip_blank(index)
+
+    # --------------------------------------------------------
+    # Prologue : locaux déjà initialisés ou réservations
+    # hoisted créées par le frontend.
+    # --------------------------------------------------------
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if local_match is None:
+            break
+
+        name = local_match.group(1)
+        expr = local_match.group(2).strip()
+
+        # Un temporaire __ret après les branches appartient au
+        # return final et non au prologue.
+        if re.fullmatch(r'__ret\d+', name):
+            break
+
+        if name in known_names:
+            return None
+
+        known_names.add(name)
+
+        if expr == "nv_none()":
+            hoisted_names.append(name)
+        else:
+            prefix_locals.append(
+                (name, expr)
+            )
+
+        index += 1
+        index = skip_blank(index)
+
+    if index >= len(lines):
+        return None
+
+    # --------------------------------------------------------
+    # Corps structuré.
+    # --------------------------------------------------------
+
+    while index < len(lines):
+        index = skip_blank(index)
+
+        if index >= len(lines):
+            break
+
+        stripped = lines[index].strip()
+
+        # ----------------------------------------------------
+        # Chaîne if / else if / else.
+        # ----------------------------------------------------
+
+        condition_match = re.match(
+            r'^if\s*\((.*)\)\s*\{\s*$',
+            stripped,
+        )
+
+        if condition_match:
+            branches = []
+
+            while index < len(lines):
+                stripped = lines[index].strip()
+
+                condition_match = re.match(
+                    r'^(?:if|else\s+if)'
+                    r'\s*\((.*)\)\s*\{\s*$',
+                    stripped,
+                )
+
+                else_match = re.match(
+                    r'^else\s*\{\s*$',
+                    stripped,
+                )
+
+                if condition_match:
+                    condition = (
+                        condition_match.group(1)
+                    )
+
+                elif else_match:
+                    if not branches:
+                        return None
+
+                    condition = None
+
+                else:
+                    return None
+
+                collected = collect_braced_block(
+                    lines,
+                    index,
+                )
+
+                if collected is None:
+                    return None
+
+                block, close_index = collected
+
+                assignments = []
+
+                for branch_line in block:
+                    branch_stripped = (
+                        branch_line.strip()
+                    )
+
+                    if not branch_stripped:
+                        continue
+
+                    assignment_match = re.match(
+                        r'([A-Za-z_][A-Za-z0-9_]*)'
+                        r'\s*=\s*(.+);\s*$',
+                        branch_stripped,
+                    )
+
+                    if assignment_match is None:
+                        return None
+
+                    target = assignment_match.group(1)
+                    expr = assignment_match.group(2)
+
+                    # Première version volontairement
+                    # conservatrice : seules les variables de
+                    # fonction déjà connues peuvent traverser
+                    # le point de jonction.
+                    if target not in known_names:
+                        return None
+
+                    assignments.append(
+                        (target, expr)
+                    )
+
+                branches.append({
+                    "condition": condition,
+                    "assignments": assignments,
+                })
+
+                index = skip_blank(
+                    close_index + 1
+                )
+
+                if condition is None:
+                    break
+
+            # Pour prouver qu'une nouvelle valeur existe après
+            # le if, il faut actuellement un else terminal.
+            if (
+                not branches
+                or branches[-1]["condition"] is not None
+            ):
+                return None
+
+            operations.append({
+                "kind": "if",
+                "branches": branches,
+            })
+
+            saw_branch = True
+            continue
+
+        # ----------------------------------------------------
+        # Return généré avec temporaire :
+        #
+        #     NvVal __ret12 = value;
+        #     return __ret12;
+        # ----------------------------------------------------
+
+        return_temp = re.match(
+            r'NvVal\s+'
+            r'(__ret\d+)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if return_temp:
+            temp_name = return_temp.group(1)
+            temp_expr = return_temp.group(2)
+
+            next_index = skip_blank(
+                index + 1
+            )
+
+            if next_index >= len(lines):
+                return None
+
+            return_line = re.match(
+                r'return\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*;\s*$',
+                lines[next_index].strip(),
+            )
+
+            if (
+                return_line is None
+                or return_line.group(1)
+                != temp_name
+            ):
+                return None
+
+            if return_expr is not None:
+                return None
+
+            return_expr = temp_expr
+            index = next_index + 1
+            continue
+
+        # Return direct.
+        direct_return = re.match(
+            r'return\s+(.+);\s*$',
+            stripped,
+        )
+
+        if direct_return:
+            expr = direct_return.group(1)
+
+            if expr == "nv_none()":
+                index += 1
+                continue
+
+            if return_expr is not None:
+                return None
+
+            return_expr = expr
+            index += 1
+            continue
+
+        return None
+
+    if (
+        not saw_branch
+        or return_expr is None
+    ):
+        return None
+
+    return {
+        "prefix_locals": prefix_locals,
+        "hoisted_names": tuple(hoisted_names),
+        "operations": operations,
+        "return": return_expr,
+    }
+
+
+
 def parse_linear_native_body(block_lines):
     """
     Conserve la structure d'une fonction numérique linéaire.
@@ -1851,6 +2148,7 @@ def parse_functions(lines):
         )
 
         conditional_native_body = None
+        branch_flow_native_body = None
         while_native_body = None
 
         # D'abord essayer la forme linéaire déjà supportée.
@@ -1881,6 +2179,16 @@ def parse_functions(lines):
         # une expression unique. Son type de retour sera donc
         # déterminé par build_native_while_helper().
         if return_expr is None:
+            branch_flow_native_body = (
+                parse_native_branch_flow_body(
+                    core
+                )
+            )
+
+        if (
+            return_expr is None
+            and branch_flow_native_body is None
+        ):
             while_native_body = (
                 parse_native_while_body(
                     core
@@ -1889,6 +2197,7 @@ def parse_functions(lines):
 
         if (
             return_expr is not None
+            or branch_flow_native_body is not None
             or while_native_body is not None
         ):
             functions[name] = {
@@ -1898,6 +2207,9 @@ def parse_functions(lines):
                 "linear_native_body": linear_native_body,
                 "conditional_native_body": (
                     conditional_native_body
+                ),
+                "branch_flow_native_body": (
+                    branch_flow_native_body
                 ),
                 "while_native_body": (
                     while_native_body
@@ -2886,6 +3198,495 @@ def build_native_conditional_helper(
 
 
 
+
+def build_native_branch_flow_helper(
+    info,
+    functions,
+    param_symbols,
+    active_functions,
+    helper_name,
+):
+    """
+    Génère un helper natif pour un flot composé de plusieurs
+    if / else avec variables survivant aux points de jonction.
+
+    Le builder effectue une analyse conservatrice :
+
+      - une variable hoisted non initialisée doit être affectée
+        dans toutes les branches avant de devenir utilisable ;
+      - les types de toutes les branches sont fusionnés avec
+        promote() ;
+      - une variable déjà native ne peut pas être réaffectée
+        vers un type qui nécessiterait d'élargir son stockage.
+    """
+
+    structured = info.get(
+        "branch_flow_native_body"
+    )
+
+    if structured is None:
+        return None
+
+    symbols = dict(param_symbols)
+
+    scratch_specializations = set()
+    body_lines = []
+
+    hoisted_names = list(
+        structured["hoisted_names"]
+    )
+
+    # Nom C stable de chaque variable traversant les branches.
+    native_names = {}
+
+    all_function_locals = (
+        [
+            name
+            for name, _ in structured[
+                "prefix_locals"
+            ]
+        ]
+        + hoisted_names
+    )
+
+    for local_index, name in enumerate(
+        all_function_locals
+    ):
+        native_names[name] = (
+            f"__{helper_name}_flow_"
+            f"{local_index}_{name}"
+        )
+
+    def rewrite_source(source):
+        result = source
+
+        for original_name, native_name in (
+            native_names.items()
+        ):
+            result = replace_identifier(
+                result,
+                original_name,
+                native_name,
+            )
+
+        return result
+
+    def lower_expr(source, local_symbols):
+        rewritten_source = rewrite_source(
+            source
+        )
+
+        rewritten = optimize_line(
+            rewritten_source,
+            functions,
+            local_symbols,
+            scratch_specializations,
+            active_functions,
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        return lower_numeric_expr_c(
+            rewritten,
+            local_symbols,
+        )
+
+    # --------------------------------------------------------
+    # Locaux initialisés avant les branches.
+    # --------------------------------------------------------
+
+    for name, raw_expr in structured[
+        "prefix_locals"
+    ]:
+        lowered = lower_expr(
+            raw_expr,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        c_type = numeric_c_type(
+            lowered[1]
+        )
+
+        if c_type is None:
+            return None
+
+        safe_name = native_names[name]
+
+        body_lines.append(
+            f"    {c_type} {safe_name} = "
+            f"{lowered[0]};\n"
+        )
+
+        symbols[safe_name] = lowered[1]
+
+    # --------------------------------------------------------
+    # Chaînes if / else successives.
+    # --------------------------------------------------------
+
+    for operation_index, operation in enumerate(
+        structured["operations"]
+    ):
+        if operation.get("kind") != "if":
+            return None
+
+        branches = operation["branches"]
+
+        if (
+            not branches
+            or branches[-1]["condition"] is not None
+        ):
+            return None
+
+        # L'environnement avant le if est commun à toutes les
+        # branches.
+        pre_symbols = dict(symbols)
+
+        staged_branches = []
+
+        # Types finaux observés dans chaque branche.
+        branch_final_types = []
+        branch_assigned_names = []
+
+        for branch_index, branch in enumerate(
+            branches
+        ):
+            branch_symbols = dict(
+                pre_symbols
+            )
+
+            # Condition : elle ne peut voir que l'état existant
+            # avant l'entrée dans la branche.
+            raw_condition = branch[
+                "condition"
+            ]
+
+            lowered_condition = None
+
+            if raw_condition is not None:
+                rewritten_condition_source = (
+                    rewrite_source(
+                        raw_condition
+                    )
+                )
+
+                rewritten_condition = optimize_line(
+                    rewritten_condition_source,
+                    functions,
+                    pre_symbols,
+                    scratch_specializations,
+                    active_functions,
+                    specialization_defs=None,
+                    emit_helper=False,
+                )
+
+                lowered_condition = (
+                    lower_numeric_condition_c(
+                        rewritten_condition,
+                        pre_symbols,
+                    )
+                )
+
+                if lowered_condition is None:
+                    return None
+
+            staged_assignments = []
+            assigned_names = set()
+
+            for target, raw_expr in branch[
+                "assignments"
+            ]:
+                safe_target = native_names.get(
+                    target
+                )
+
+                if safe_target is None:
+                    return None
+
+                lowered = lower_expr(
+                    raw_expr,
+                    branch_symbols,
+                )
+
+                if lowered is None:
+                    return None
+
+                expr_type = lowered[1]
+
+                if expr_type not in NUMERIC_TYPES:
+                    return None
+
+                # Variable déjà définitivement initialisée
+                # avant le if.
+                if safe_target in pre_symbols:
+                    target_type = pre_symbols[
+                        safe_target
+                    ]
+
+                    merged = promote(
+                        target_type,
+                        expr_type,
+                    )
+
+                    # Ne jamais élargir silencieusement le
+                    # stockage d'une variable C déjà déclarée.
+                    if merged != target_type:
+                        return None
+
+                    branch_symbols[
+                        safe_target
+                    ] = target_type
+
+                else:
+                    previous_type = (
+                        branch_symbols.get(
+                            safe_target
+                        )
+                    )
+
+                    if previous_type is None:
+                        branch_symbols[
+                            safe_target
+                        ] = expr_type
+                    else:
+                        merged = promote(
+                            previous_type,
+                            expr_type,
+                        )
+
+                        if merged not in NUMERIC_TYPES:
+                            return None
+
+                        branch_symbols[
+                            safe_target
+                        ] = merged
+
+                assigned_names.add(target)
+
+                staged_assignments.append({
+                    "target": target,
+                    "safe_target": safe_target,
+                    "expr": lowered[0],
+                    "expr_type": expr_type,
+                })
+
+            branch_assigned_names.append(
+                assigned_names
+            )
+
+            final_types = {}
+
+            for name in assigned_names:
+                safe_name = native_names[
+                    name
+                ]
+
+                final_types[name] = (
+                    branch_symbols[
+                        safe_name
+                    ]
+                )
+
+            branch_final_types.append(
+                final_types
+            )
+
+            staged_branches.append({
+                "condition": lowered_condition,
+                "assignments": staged_assignments,
+            })
+
+        # ----------------------------------------------------
+        # Déterminer quelles variables deviennent
+        # définitivement initialisées à la sortie du if.
+        # ----------------------------------------------------
+
+        new_joined_types = {}
+
+        for name in hoisted_names:
+            safe_name = native_names[name]
+
+            if safe_name in pre_symbols:
+                continue
+
+            touched = any(
+                name in assigned
+                for assigned in branch_assigned_names
+            )
+
+            if not touched:
+                continue
+
+            # Une nouvelle variable n'est valide après le point
+            # de jonction que si toutes les branches l'ont
+            # affectée.
+            if not all(
+                name in assigned
+                for assigned in branch_assigned_names
+            ):
+                return None
+
+            joined_type = None
+
+            for final_types in branch_final_types:
+                branch_type = final_types.get(
+                    name
+                )
+
+                if branch_type is None:
+                    return None
+
+                if joined_type is None:
+                    joined_type = branch_type
+                else:
+                    joined_type = promote(
+                        joined_type,
+                        branch_type,
+                    )
+
+            if joined_type not in NUMERIC_TYPES:
+                return None
+
+            new_joined_types[
+                name
+            ] = joined_type
+
+        # Déclarations C des nouvelles valeurs fusionnées.
+        for name, joined_type in (
+            new_joined_types.items()
+        ):
+            c_type = numeric_c_type(
+                joined_type
+            )
+
+            if c_type is None:
+                return None
+
+            body_lines.append(
+                f"    {c_type} "
+                f"{native_names[name]};\n"
+            )
+
+        # ----------------------------------------------------
+        # Émission du if / else.
+        # ----------------------------------------------------
+
+        for branch_index, staged in enumerate(
+            staged_branches
+        ):
+            condition = staged[
+                "condition"
+            ]
+
+            if condition is None:
+                if branch_index == 0:
+                    return None
+
+                body_lines.append(
+                    "    else {\n"
+                )
+
+            else:
+                keyword = (
+                    "if"
+                    if branch_index == 0
+                    else "else if"
+                )
+
+                body_lines.append(
+                    f"    {keyword} "
+                    f"({condition}) {{\n"
+                )
+
+            for assignment in staged[
+                "assignments"
+            ]:
+                name = assignment["target"]
+                safe_target = assignment[
+                    "safe_target"
+                ]
+
+                if safe_target in pre_symbols:
+                    target_type = pre_symbols[
+                        safe_target
+                    ]
+                else:
+                    target_type = (
+                        new_joined_types.get(
+                            name
+                        )
+                    )
+
+                if target_type is None:
+                    return None
+
+                c_type = numeric_c_type(
+                    target_type
+                )
+
+                if c_type is None:
+                    return None
+
+                body_lines.append(
+                    f"        {safe_target} = "
+                    f"({c_type})"
+                    f"({assignment['expr']});\n"
+                )
+
+            body_lines.append(
+                "    }\n"
+            )
+
+        # Après le point de jonction, les nouvelles variables
+        # prouvées deviennent disponibles pour les opérations
+        # suivantes.
+        for name, joined_type in (
+            new_joined_types.items()
+        ):
+            symbols[
+                native_names[name]
+            ] = joined_type
+
+    # --------------------------------------------------------
+    # Return final.
+    # --------------------------------------------------------
+
+    return_source = rewrite_source(
+        structured["return"]
+    )
+
+    rewritten_return = optimize_line(
+        return_source,
+        functions,
+        symbols,
+        scratch_specializations,
+        active_functions,
+        specialization_defs=None,
+        emit_helper=False,
+    )
+
+    lowered_return = lower_numeric_expr_c(
+        rewritten_return,
+        symbols,
+    )
+
+    if lowered_return is None:
+        return None
+
+    if lowered_return[1] not in NUMERIC_TYPES:
+        return None
+
+    return {
+        "lines": body_lines,
+        "return_expr": lowered_return[0],
+        "return_type": lowered_return[1],
+        "terminal_returns": False,
+    }
+
+
+
 def build_native_while_helper(
     info,
     functions,
@@ -3862,7 +4663,45 @@ def inline_chunk(
     # Le builder fournit directement le type de retour.
     # --------------------------------------------------------
 
-    if info.get("while_native_body") is not None:
+    if info.get("branch_flow_native_body") is not None:
+        provisional_helper_name = (
+            f"clariox_spec_{name}_native_branch_flow"
+        )
+
+        structured_helper = (
+            build_native_branch_flow_helper(
+                info,
+                functions,
+                param_symbols,
+                active_functions | {name},
+                provisional_helper_name,
+            )
+        )
+
+        if structured_helper is None:
+            return None
+
+        return_type = structured_helper[
+            "return_type"
+        ]
+
+        if return_type not in NUMERIC_TYPES:
+            return None
+
+        # Comme pour while, ce flot structuré ne peut pas être
+        # aplati en expression pendant une analyse de preuve.
+        if not emit_helper:
+            return None
+
+        native_body = (
+            structured_helper.get(
+                "return_expr",
+                "0",
+            ),
+            return_type,
+        )
+
+    elif info.get("while_native_body") is not None:
         provisional_helper_name = (
             f"clariox_spec_{name}_native_while"
         )
