@@ -557,9 +557,212 @@ def collect_braced_block(lines, start_index):
     return None
 
 
+def parse_hoisted_branch_return(
+    block_lines,
+    inherited_defs=None,
+    hoisted_names=None,
+):
+    """
+    Reconstruit l'expression retournée par une branche lorsque
+    certaines variables de fonction ont été pré-déclarées :
+
+        NvVal y = nv_none();
+
+        if (...) {
+            y = ...;
+            return y;
+        }
+
+    Cette représentation sert à l'inférence de type.
+    """
+
+    local_defs = dict(
+        inherited_defs or {}
+    )
+
+    hoisted = set(
+        hoisted_names or ()
+    )
+
+    assigned_hoisted = set()
+    return_expr = None
+
+    for line in block_lines:
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if local_match:
+            name = local_match.group(1)
+            expr = local_match.group(2)
+
+            if name in local_defs:
+                return None
+
+            local_defs[name] = expr
+            continue
+
+        assignment_match = re.match(
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if assignment_match:
+            name = assignment_match.group(1)
+            expr = assignment_match.group(2)
+
+            if (
+                name not in hoisted
+                or name in assigned_hoisted
+            ):
+                return None
+
+            local_defs[name] = expr
+            assigned_hoisted.add(name)
+            continue
+
+        return_match = re.match(
+            r'return\s+(.+);\s*$',
+            stripped,
+        )
+
+        if return_match:
+            expr = return_match.group(1)
+
+            if expr == "nv_none()":
+                continue
+
+            if return_expr is not None:
+                return None
+
+            return_expr = expr
+            continue
+
+        return None
+
+    if return_expr is None:
+        return None
+
+    return expand_local_expr(
+        return_expr,
+        local_defs,
+    )
+
+
+def parse_hoisted_branch_return(
+    block_lines,
+    inherited_defs=None,
+    hoisted_names=None,
+):
+    """
+    Reconstruit l'expression retournée par une branche lorsque
+    certaines variables de fonction ont été pré-déclarées :
+
+        NvVal y = nv_none();
+
+        if (...) {
+            y = ...;
+            return y;
+        }
+
+    Cette représentation sert à l'inférence de type.
+    """
+
+    local_defs = dict(
+        inherited_defs or {}
+    )
+
+    hoisted = set(
+        hoisted_names or ()
+    )
+
+    assigned_hoisted = set()
+    return_expr = None
+
+    for line in block_lines:
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if local_match:
+            name = local_match.group(1)
+            expr = local_match.group(2)
+
+            if name in local_defs:
+                return None
+
+            local_defs[name] = expr
+            continue
+
+        assignment_match = re.match(
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if assignment_match:
+            name = assignment_match.group(1)
+            expr = assignment_match.group(2)
+
+            if (
+                name not in hoisted
+                or name in assigned_hoisted
+            ):
+                return None
+
+            local_defs[name] = expr
+            assigned_hoisted.add(name)
+            continue
+
+        return_match = re.match(
+            r'return\s+(.+);\s*$',
+            stripped,
+        )
+
+        if return_match:
+            expr = return_match.group(1)
+
+            if expr == "nv_none()":
+                continue
+
+            if return_expr is not None:
+                return None
+
+            return_expr = expr
+            continue
+
+        return None
+
+    if return_expr is None:
+        return None
+
+    return expand_local_expr(
+        return_expr,
+        local_defs,
+    )
+
+
 def parse_conditional_return(lines):
     index = 0
     prefix_defs = {}
+    hoisted_names = set()
 
     def skip_blank(i):
         while (
@@ -572,7 +775,14 @@ def parse_conditional_return(lines):
 
     index = skip_blank(index)
 
-    # Variables numériques préparées avant le if.
+    # Valeurs préparées avant le if.
+    #
+    # Une déclaration à nv_none() provenant du nouveau frontend
+    # est seulement une réservation de variable :
+    #
+    #     NvVal y = nv_none();
+    #
+    # Sa vraie valeur sera déterminée dans chaque branche.
     while index < len(lines):
         stripped = lines[index].strip()
 
@@ -587,13 +797,18 @@ def parse_conditional_return(lines):
             break
 
         name = local_match.group(1)
+        expr = local_match.group(2).strip()
 
-        if name in prefix_defs:
+        if (
+            name in prefix_defs
+            or name in hoisted_names
+        ):
             return None
 
-        prefix_defs[name] = (
-            local_match.group(2)
-        )
+        if expr == "nv_none()":
+            hoisted_names.add(name)
+        else:
+            prefix_defs[name] = expr
 
         index += 1
         index = skip_blank(index)
@@ -642,9 +857,10 @@ def parse_conditional_return(lines):
 
         block, close_index = collected
 
-        branch_expr = parse_return_block(
+        branch_expr = parse_hoisted_branch_return(
             block,
             prefix_defs,
+            hoisted_names,
         )
 
         if branch_expr is None:
@@ -661,16 +877,12 @@ def parse_conditional_return(lines):
         if condition is None:
             break
 
-    # Un else final est obligatoire dans cette première
-    # version : chaque chemin doit retourner une valeur.
     if (
         not branches
         or branches[-1][0] is not None
     ):
         return None
 
-    # Après le else, seul le return nv_none() généré par
-    # clarioxc est autorisé.
     while index < len(lines):
         stripped = lines[index].strip()
 
@@ -699,21 +911,175 @@ def parse_conditional_return(lines):
 
 
 
+def parse_native_branch_block(
+    block_lines,
+    inherited_defs=None,
+    hoisted_names=None,
+):
+    """
+    Conserve les calculs locaux d'une branche.
+
+    Accepte à la fois :
+
+        NvVal y = expr;
+
+    et le nouveau format frontend :
+
+        y = expr;
+
+    lorsque y a été pré-déclaré à nv_none() dans le
+    prologue de la fonction.
+    """
+
+    inherited = dict(
+        inherited_defs or {}
+    )
+
+    hoisted = set(
+        hoisted_names or ()
+    )
+
+    locals_list = []
+    local_names = set()
+
+    return_expr = None
+
+    for line in block_lines:
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if local_match:
+            name = local_match.group(1)
+            expr = local_match.group(2)
+
+            if (
+                name in inherited
+                or name in local_names
+            ):
+                return None
+
+            expr = expand_local_expr(
+                expr,
+                inherited,
+            )
+
+            if expr is None:
+                return None
+
+            locals_list.append(
+                (name, expr)
+            )
+
+            local_names.add(name)
+            continue
+
+        assignment_match = re.match(
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if assignment_match:
+            name = assignment_match.group(1)
+            expr = assignment_match.group(2)
+
+            # Pour cette première version, seules les variables
+            # explicitement pré-déclarées par le frontend sont
+            # acceptées ici.
+            if (
+                name not in hoisted
+                or name in local_names
+            ):
+                return None
+
+            expr = expand_local_expr(
+                expr,
+                inherited,
+            )
+
+            if expr is None:
+                return None
+
+            locals_list.append(
+                (name, expr)
+            )
+
+            local_names.add(name)
+            continue
+
+        return_match = re.match(
+            r'return\s+(.+);\s*$',
+            stripped,
+        )
+
+        if return_match:
+            expr = return_match.group(1)
+
+            if expr == "nv_none()":
+                continue
+
+            if return_expr is not None:
+                return None
+
+            return_expr = expand_local_expr(
+                expr,
+                inherited,
+            )
+
+            if return_expr is None:
+                return None
+
+            continue
+
+        return None
+
+    if return_expr is None:
+        return None
+
+    # Supprimer le temporaire artificiel généré par clarioxc :
+    #
+    #     NvVal __ret5 = z;
+    #     return __ret5;
+    #
+    # devient simplement return z dans le helper.
+    if (
+        locals_list
+        and re.fullmatch(
+            r'__ret\d+',
+            return_expr,
+        )
+        and locals_list[-1][0] == return_expr
+    ):
+        _, return_expr = locals_list.pop()
+
+    return {
+        "locals": locals_list,
+        "return": return_expr,
+    }
+
+
 
 def parse_conditional_native_body(lines):
     """
-    Conserve la structure d'un if / else if / else numérique.
+    Conserve un if / else if / else numérique structuré.
 
-    L'inférence générale continue d'utiliser
-    parse_conditional_return(), qui fabrique une expression
-    conditionnelle.
-
-    Cette représentation sert uniquement à générer un helper C
-    natif structuré avec de vrais if / else if / else.
+    Les variables pré-déclarées à nv_none() par le frontend
+    sont reconnues comme des locaux de fonction dont les
+    affectations réelles apparaissent dans les branches.
     """
 
     index = 0
     prefix_defs = {}
+    hoisted_names = set()
 
     def skip_blank(i):
         while (
@@ -726,9 +1092,6 @@ def parse_conditional_native_body(lines):
 
     index = skip_blank(index)
 
-    # Variables numériques préparées avant le if.
-    # Pour cette première version, elles sont développées dans
-    # les conditions/retours comme dans parse_conditional_return.
     while index < len(lines):
         stripped = lines[index].strip()
 
@@ -743,11 +1106,18 @@ def parse_conditional_native_body(lines):
             break
 
         name = local_match.group(1)
+        expr = local_match.group(2).strip()
 
-        if name in prefix_defs:
+        if (
+            name in prefix_defs
+            or name in hoisted_names
+        ):
             return None
 
-        prefix_defs[name] = local_match.group(2)
+        if expr == "nv_none()":
+            hoisted_names.add(name)
+        else:
+            prefix_defs[name] = expr
 
         index += 1
         index = skip_blank(index)
@@ -781,8 +1151,6 @@ def parse_conditional_native_body(lines):
                 return None
 
         elif else_match:
-            # Un else sans if précédent n'est pas une structure
-            # conditionnelle valide pour notre helper natif.
             if not branches:
                 return None
 
@@ -801,20 +1169,17 @@ def parse_conditional_native_body(lines):
 
         block, close_index = collected
 
-        # Pour cette V1 structurée, on réutilise exactement le
-        # parseur de retour déjà éprouvé. Les locaux propres à
-        # la branche sont donc encore développés dans son
-        # expression de retour.
-        branch_expr = parse_return_block(
+        branch_body = parse_native_branch_block(
             block,
             prefix_defs,
+            hoisted_names,
         )
 
-        if branch_expr is None:
+        if branch_body is None:
             return None
 
         branches.append(
-            (condition, branch_expr)
+            (condition, branch_body)
         )
 
         index = skip_blank(
@@ -824,7 +1189,6 @@ def parse_conditional_native_body(lines):
         if condition is None:
             break
 
-    # Tous les chemins doivent retourner : else final obligatoire.
     if (
         not branches
         or branches[-1][0] is not None
@@ -847,6 +1211,7 @@ def parse_conditional_native_body(lines):
     return {
         "branches": branches,
     }
+
 
 
 def parse_linear_native_body(block_lines):
@@ -1819,19 +2184,23 @@ def build_native_conditional_helper(
     functions,
     param_symbols,
     active_functions,
+    helper_name,
 ):
     """
-    Produit un corps C structuré pour :
+    Produit un helper C structuré avec :
 
         if (...) {
-            return ...;
-        } else if (...) {
-            return ...;
-        } else {
+            double local = ...;
             return ...;
         }
+        else if (...) {
+            ...
+        }
+        else {
+            ...
+        }
 
-    La fonction générique NvVal reste inchangée.
+    Chaque branche possède son propre environnement natif.
     """
 
     structured = info.get(
@@ -1841,7 +2210,7 @@ def build_native_conditional_helper(
     if structured is None:
         return None
 
-    symbols = dict(param_symbols)
+    base_symbols = dict(param_symbols)
     scratch_specializations = set()
 
     body_lines = []
@@ -1851,17 +2220,107 @@ def build_native_conditional_helper(
 
     for branch_index, (
         raw_condition,
-        raw_return,
+        branch_body,
     ) in enumerate(branches):
 
-        # ----------------------------------------------
-        # Expression retournée par la branche.
-        # ----------------------------------------------
+        branch_symbols = dict(
+            base_symbols
+        )
+
+        native_local_names = {}
+        local_lines = []
+
+        # --------------------------------------------------
+        # Variables locales propres à cette branche.
+        # --------------------------------------------------
+
+        for local_index, (
+            local_name,
+            raw_expr,
+        ) in enumerate(
+            branch_body["locals"]
+        ):
+            rewritten_source = raw_expr
+
+            # Les références aux locaux précédents utilisent
+            # leur nom C privé.
+            for (
+                original_name,
+                native_name,
+            ) in native_local_names.items():
+                rewritten_source = replace_identifier(
+                    rewritten_source,
+                    original_name,
+                    native_name,
+                )
+
+            rewritten = optimize_line(
+                rewritten_source,
+                functions,
+                branch_symbols,
+                scratch_specializations,
+                active_functions,
+                specialization_defs=None,
+                emit_helper=False,
+            )
+
+            lowered = lower_numeric_expr_c(
+                rewritten,
+                branch_symbols,
+            )
+
+            if lowered is None:
+                return None
+
+            c_type = numeric_c_type(
+                lowered[1]
+            )
+
+            if c_type is None:
+                return None
+
+            safe_local_name = (
+                f"__{helper_name}_branch_"
+                f"{branch_index}_local_"
+                f"{local_index}_{local_name}"
+            )
+
+            local_lines.append(
+                f"        {c_type} "
+                f"{safe_local_name} = "
+                f"{lowered[0]};\n"
+            )
+
+            native_local_names[
+                local_name
+            ] = safe_local_name
+
+            branch_symbols[
+                safe_local_name
+            ] = lowered[1]
+
+        # --------------------------------------------------
+        # Return de la branche.
+        # --------------------------------------------------
+
+        return_source = branch_body[
+            "return"
+        ]
+
+        for (
+            original_name,
+            native_name,
+        ) in native_local_names.items():
+            return_source = replace_identifier(
+                return_source,
+                original_name,
+                native_name,
+            )
 
         rewritten_return = optimize_line(
-            raw_return,
+            return_source,
             functions,
-            symbols,
+            branch_symbols,
             scratch_specializations,
             active_functions,
             specialization_defs=None,
@@ -1870,7 +2329,7 @@ def build_native_conditional_helper(
 
         lowered_return = lower_numeric_expr_c(
             rewritten_return,
-            symbols,
+            branch_symbols,
         )
 
         if lowered_return is None:
@@ -1880,9 +2339,9 @@ def build_native_conditional_helper(
             lowered_return[1]
         )
 
-        # ----------------------------------------------
-        # else final.
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # else final
+        # --------------------------------------------------
 
         if raw_condition is None:
             if branch_index == 0:
@@ -1890,6 +2349,10 @@ def build_native_conditional_helper(
 
             body_lines.append(
                 "    else {\n"
+            )
+
+            body_lines.extend(
+                local_lines
             )
 
             body_lines.append(
@@ -1903,14 +2366,14 @@ def build_native_conditional_helper(
 
             continue
 
-        # ----------------------------------------------
-        # if / else if.
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # if / else if
+        # --------------------------------------------------
 
         rewritten_condition = optimize_line(
             raw_condition,
             functions,
-            symbols,
+            base_symbols,
             scratch_specializations,
             active_functions,
             specialization_defs=None,
@@ -1920,7 +2383,7 @@ def build_native_conditional_helper(
         lowered_condition = (
             lower_numeric_condition_c(
                 rewritten_condition,
-                symbols,
+                base_symbols,
             )
         )
 
@@ -1936,6 +2399,10 @@ def build_native_conditional_helper(
         body_lines.append(
             f"    {keyword} "
             f"({lowered_condition}) {{\n"
+        )
+
+        body_lines.extend(
+            local_lines
         )
 
         body_lines.append(
@@ -2131,6 +2598,11 @@ def inline_chunk(
                 functions,
                 param_symbols,
                 active_functions | {name},
+                specialization_c_name(
+                    name,
+                    tuple(arg_types),
+                    return_type,
+                ),
             )
         )
 
