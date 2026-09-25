@@ -1564,6 +1564,7 @@ def parse_native_while_body(block_lines):
 
     index = 0
     locals_list = []
+    deferred_locals = []
     known_names = set()
 
     def skip_blank(i):
@@ -1605,9 +1606,18 @@ def parse_native_while_body(block_lines):
 
         known_names.add(name)
 
-        locals_list.append(
-            (name, expr)
-        )
+        # Une variable créée dans un bloc est remontée par
+        # clarioxc.c au niveau fonction avec nv_none().
+        # Elle recevra son vrai type lors de sa première
+        # affectation numérique dans la boucle.
+        if expr.strip() == "nv_none()":
+            deferred_locals.append(
+                name
+            )
+        else:
+            locals_list.append(
+                (name, expr)
+            )
 
         index += 1
         index = skip_blank(index)
@@ -1727,6 +1737,7 @@ def parse_native_while_body(block_lines):
 
     return {
         "locals": locals_list,
+        "deferred_locals": deferred_locals,
         "condition": condition,
         "operations": operations,
         "return": return_expr,
@@ -2978,6 +2989,124 @@ def build_native_while_helper(
             f"{lowered[0]};\n"
         )
 
+    def source_uses_name(source, name):
+        if not source:
+            return False
+
+        return re.search(
+            rf'(?<![A-Za-z0-9_])'
+            rf'{re.escape(name)}'
+            rf'(?![A-Za-z0-9_])',
+            source,
+        ) is not None
+
+    def operation_uses_name(operation, name):
+        kind = operation.get("kind")
+
+        if kind == "assign":
+            return (
+                operation["target"] == name
+                or source_uses_name(
+                    operation["expr"],
+                    name,
+                )
+            )
+
+        if kind == "return":
+            return source_uses_name(
+                operation["expr"],
+                name,
+            )
+
+        if kind == "while":
+            if source_uses_name(
+                operation["condition"],
+                name,
+            ):
+                return True
+
+            return any(
+                operation_uses_name(
+                    nested,
+                    name,
+                )
+                for nested in operation["operations"]
+            )
+
+        if kind == "if":
+            for branch in operation["branches"]:
+                condition = branch["condition"]
+
+                if (
+                    condition is not None
+                    and source_uses_name(
+                        condition,
+                        name,
+                    )
+                ):
+                    return True
+
+                if any(
+                    operation_uses_name(
+                        nested,
+                        name,
+                    )
+                    for nested in branch[
+                        "operations"
+                    ]
+                ):
+                    return True
+
+            return False
+
+        return False
+
+    def find_deferred_initializer(name):
+        # Le local n'est pas initialisé avant la boucle.
+        if source_uses_name(
+            structured["condition"],
+            name,
+        ):
+            return None
+
+        # Si la boucle ne s'exécute jamais, le return final
+        # ne doit pas dépendre de cette variable.
+        if source_uses_name(
+            structured["return"],
+            name,
+        ):
+            return None
+
+        # Première utilisation autorisée :
+        #
+        #     name = expression
+        #
+        # directement dans la boucle externe.
+        for operation in structured["operations"]:
+
+            if (
+                operation.get("kind") == "assign"
+                and operation["target"] == name
+            ):
+                # Refuser par exemple :
+                #     j = j + 1
+                # avant toute initialisation de j.
+                if source_uses_name(
+                    operation["expr"],
+                    name,
+                ):
+                    return None
+
+                return operation["expr"]
+
+            if operation_uses_name(
+                operation,
+                name,
+            ):
+                return None
+
+        return None
+
     # --------------------------------------------------------
     # Locaux initiaux.
     # --------------------------------------------------------
@@ -3032,6 +3161,85 @@ def build_native_while_helper(
         body_lines.append(
             f"    {c_type} {safe_name} = "
             f"{lowered[0]};\n"
+        )
+
+        native_local_names[
+            local_name
+        ] = safe_name
+
+        native_local_types[
+            local_name
+        ] = typ
+
+        symbols[
+            safe_name
+        ] = typ
+
+    # --------------------------------------------------------
+    # Locaux hoistés depuis un bloc.
+    #
+    # Déclaration C au niveau du helper, mais initialisation
+    # conservée à son emplacement original dans la boucle.
+    # --------------------------------------------------------
+
+    for deferred_index, local_name in enumerate(
+        structured.get(
+            "deferred_locals",
+            [],
+        )
+    ):
+        raw_expr = find_deferred_initializer(
+            local_name
+        )
+
+        if raw_expr is None:
+            return None
+
+        rewritten_source = (
+            rewrite_native_names(
+                raw_expr
+            )
+        )
+
+        rewritten = optimize_line(
+            rewritten_source,
+            functions,
+            symbols,
+            scratch_specializations,
+            active_functions,
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        lowered = lower_numeric_expr_c(
+            rewritten,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        typ = lowered[1]
+
+        if typ not in NUMERIC_TYPES:
+            return None
+
+        c_type = numeric_c_type(
+            typ
+        )
+
+        if c_type is None:
+            return None
+
+        safe_name = (
+            f"__{helper_name}_while_deferred_"
+            f"{deferred_index}_{local_name}"
+        )
+
+        # Pas de valeur artificielle : la vraie initialisation
+        # reste l'affectation présente dans le corps du while.
+        body_lines.append(
+            f"    {c_type} {safe_name};\n"
         )
 
         native_local_names[
