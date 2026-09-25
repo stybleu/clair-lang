@@ -3207,17 +3207,23 @@ def build_native_branch_flow_helper(
     helper_name,
 ):
     """
-    Génère un helper natif pour un flot composé de plusieurs
-    if / else avec variables survivant aux points de jonction.
+    Génère un flot natif versionné à travers les points
+    de jonction if / elif / else.
 
-    Le builder effectue une analyse conservatrice :
+    Chaque réaffectation de branche peut produire une nouvelle
+    version C. Le point de jonction fusionne ensuite les types.
 
-      - une variable hoisted non initialisée doit être affectée
-        dans toutes les branches avant de devenir utilisable ;
-      - les types de toutes les branches sont fusionnés avec
-        promote() ;
-      - une variable déjà native ne peut pas être réaffectée
-        vers un type qui nécessiterait d'élargir son stockage.
+    Cela permet notamment :
+
+        int v0
+          |
+          if
+         /  |
+      float int
+         |  /
+        double v1
+
+    sans modifier rétroactivement le stockage de v0.
     """
 
     structured = info.get(
@@ -3228,52 +3234,84 @@ def build_native_branch_flow_helper(
         return None
 
     symbols = dict(param_symbols)
-
     scratch_specializations = set()
     body_lines = []
 
-    hoisted_names = list(
+    prefix_locals = structured[
+        "prefix_locals"
+    ]
+
+    hoisted_names = set(
         structured["hoisted_names"]
     )
 
-    # Nom C stable de chaque variable traversant les branches.
-    native_names = {}
+    known_names = {
+        name
+        for name, _ in prefix_locals
+    } | hoisted_names
 
-    all_function_locals = (
-        [
-            name
-            for name, _ in structured[
-                "prefix_locals"
+    # Variable source -> version C actuellement visible.
+    current_names = {}
+
+    # Variable source -> type numérique actuellement visible.
+    current_types = {}
+
+    version_numbers = {
+        name: 0
+        for name in known_names
+    }
+
+    local_slots = {
+        name: index
+        for index, name in enumerate(
+            [
+                name
+                for name, _ in prefix_locals
             ]
-        ]
-        + hoisted_names
-    )
+            + list(structured["hoisted_names"])
+        )
+    }
 
-    for local_index, name in enumerate(
-        all_function_locals
+    def make_version_name(
+        source_name,
+        version,
     ):
-        native_names[name] = (
+        slot = local_slots[source_name]
+
+        return (
             f"__{helper_name}_flow_"
-            f"{local_index}_{name}"
+            f"{slot}_{source_name}_v{version}"
         )
 
-    def rewrite_source(source):
+    def rewrite_source(
+        source,
+        mapping,
+    ):
         result = source
 
-        for original_name, native_name in (
-            native_names.items()
+        # Remplacer les identifiants les plus longs d'abord
+        # évite les collisions de noms préfixés.
+        for original_name in sorted(
+            mapping,
+            key=len,
+            reverse=True,
         ):
             result = replace_identifier(
                 result,
                 original_name,
-                native_name,
+                mapping[original_name],
             )
 
         return result
 
-    def lower_expr(source, local_symbols):
+    def lower_expr(
+        source,
+        mapping,
+        local_symbols,
+    ):
         rewritten_source = rewrite_source(
-            source
+            source,
+            mapping,
         )
 
         rewritten = optimize_line(
@@ -3292,38 +3330,47 @@ def build_native_branch_flow_helper(
         )
 
     # --------------------------------------------------------
-    # Locaux initialisés avant les branches.
+    # Variables initialisées avant le premier if.
     # --------------------------------------------------------
 
-    for name, raw_expr in structured[
-        "prefix_locals"
-    ]:
+    for name, raw_expr in prefix_locals:
         lowered = lower_expr(
             raw_expr,
+            current_names,
             symbols,
         )
 
         if lowered is None:
             return None
 
+        value_type = lowered[1]
+
+        if value_type not in NUMERIC_TYPES:
+            return None
+
         c_type = numeric_c_type(
-            lowered[1]
+            value_type
         )
 
         if c_type is None:
             return None
 
-        safe_name = native_names[name]
+        safe_name = make_version_name(
+            name,
+            0,
+        )
 
         body_lines.append(
             f"    {c_type} {safe_name} = "
-            f"{lowered[0]};\n"
+            f"({c_type})({lowered[0]});\n"
         )
 
-        symbols[safe_name] = lowered[1]
+        current_names[name] = safe_name
+        current_types[name] = value_type
+        symbols[safe_name] = value_type
 
     # --------------------------------------------------------
-    # Chaînes if / else successives.
+    # Points de jonction successifs.
     # --------------------------------------------------------
 
     for operation_index, operation in enumerate(
@@ -3340,25 +3387,29 @@ def build_native_branch_flow_helper(
         ):
             return None
 
-        # L'environnement avant le if est commun à toutes les
-        # branches.
+        pre_names = dict(current_names)
+        pre_types = dict(current_types)
         pre_symbols = dict(symbols)
 
         staged_branches = []
 
-        # Types finaux observés dans chaque branche.
+        # Pour chaque branche :
+        #   source name -> dernière version C de cette branche
+        branch_final_names = []
+
+        # Pour chaque branche :
+        #   source name -> type final de cette branche
         branch_final_types = []
-        branch_assigned_names = []
+
+        branch_touched = []
 
         for branch_index, branch in enumerate(
             branches
         ):
-            branch_symbols = dict(
-                pre_symbols
-            )
+            branch_names = dict(pre_names)
+            branch_types = dict(pre_types)
+            branch_symbols = dict(pre_symbols)
 
-            # Condition : elle ne peut voir que l'état existant
-            # avant l'entrée dans la branche.
             raw_condition = branch[
                 "condition"
             ]
@@ -3366,14 +3417,15 @@ def build_native_branch_flow_helper(
             lowered_condition = None
 
             if raw_condition is not None:
-                rewritten_condition_source = (
+                rewritten_condition = (
                     rewrite_source(
-                        raw_condition
+                        raw_condition,
+                        pre_names,
                     )
                 )
 
                 rewritten_condition = optimize_line(
-                    rewritten_condition_source,
+                    rewritten_condition,
                     functions,
                     pre_symbols,
                     scratch_specializations,
@@ -3393,20 +3445,20 @@ def build_native_branch_flow_helper(
                     return None
 
             staged_assignments = []
-            assigned_names = set()
+            touched = set()
 
-            for target, raw_expr in branch[
-                "assignments"
-            ]:
-                safe_target = native_names.get(
-                    target
-                )
-
-                if safe_target is None:
+            for assignment_index, (
+                target,
+                raw_expr,
+            ) in enumerate(
+                branch["assignments"]
+            ):
+                if target not in known_names:
                     return None
 
                 lowered = lower_expr(
                     raw_expr,
+                    branch_names,
                     branch_symbols,
                 )
 
@@ -3418,79 +3470,55 @@ def build_native_branch_flow_helper(
                 if expr_type not in NUMERIC_TYPES:
                     return None
 
-                # Variable déjà définitivement initialisée
-                # avant le if.
-                if safe_target in pre_symbols:
-                    target_type = pre_symbols[
-                        safe_target
-                    ]
+                c_type = numeric_c_type(
+                    expr_type
+                )
 
-                    merged = promote(
-                        target_type,
-                        expr_type,
-                    )
+                if c_type is None:
+                    return None
 
-                    # Ne jamais élargir silencieusement le
-                    # stockage d'une variable C déjà déclarée.
-                    if merged != target_type:
-                        return None
-
-                    branch_symbols[
-                        safe_target
-                    ] = target_type
-
-                else:
-                    previous_type = (
-                        branch_symbols.get(
-                            safe_target
-                        )
-                    )
-
-                    if previous_type is None:
-                        branch_symbols[
-                            safe_target
-                        ] = expr_type
-                    else:
-                        merged = promote(
-                            previous_type,
-                            expr_type,
-                        )
-
-                        if merged not in NUMERIC_TYPES:
-                            return None
-
-                        branch_symbols[
-                            safe_target
-                        ] = merged
-
-                assigned_names.add(target)
+                # Version temporaire propre à cette branche.
+                temp_name = (
+                    f"__{helper_name}_op_"
+                    f"{operation_index}_branch_"
+                    f"{branch_index}_assign_"
+                    f"{assignment_index}_{target}"
+                )
 
                 staged_assignments.append({
                     "target": target,
-                    "safe_target": safe_target,
+                    "name": temp_name,
+                    "type": expr_type,
+                    "c_type": c_type,
                     "expr": lowered[0],
-                    "expr_type": expr_type,
                 })
 
-            branch_assigned_names.append(
-                assigned_names
+                # Les affectations suivantes de cette même
+                # branche doivent voir la nouvelle version.
+                branch_names[
+                    target
+                ] = temp_name
+
+                branch_types[
+                    target
+                ] = expr_type
+
+                branch_symbols[
+                    temp_name
+                ] = expr_type
+
+                touched.add(target)
+
+            branch_final_names.append(
+                branch_names
             )
 
-            final_types = {}
-
-            for name in assigned_names:
-                safe_name = native_names[
-                    name
-                ]
-
-                final_types[name] = (
-                    branch_symbols[
-                        safe_name
-                    ]
-                )
-
             branch_final_types.append(
-                final_types
+                branch_types
+            )
+
+            branch_touched.append(
+                touched
             )
 
             staged_branches.append({
@@ -3499,44 +3527,60 @@ def build_native_branch_flow_helper(
             })
 
         # ----------------------------------------------------
-        # Déterminer quelles variables deviennent
-        # définitivement initialisées à la sortie du if.
+        # Calcul des variables devant recevoir une nouvelle
+        # version après le point de jonction.
         # ----------------------------------------------------
 
-        new_joined_types = {}
+        join_info = {}
 
-        for name in hoisted_names:
-            safe_name = native_names[name]
-
-            if safe_name in pre_symbols:
-                continue
-
-            touched = any(
-                name in assigned
-                for assigned in branch_assigned_names
+        for name in known_names:
+            touched_any = any(
+                name in touched
+                for touched in branch_touched
             )
 
-            if not touched:
+            if not touched_any:
                 continue
 
-            # Une nouvelle variable n'est valide après le point
-            # de jonction que si toutes les branches l'ont
-            # affectée.
-            if not all(
-                name in assigned
-                for assigned in branch_assigned_names
-            ):
-                return None
+            existed_before = (
+                name in pre_names
+            )
+
+            # Variable hoisted non encore initialisée :
+            # toutes les branches doivent la définir.
+            if not existed_before:
+                if not all(
+                    name in touched
+                    for touched in branch_touched
+                ):
+                    return None
 
             joined_type = None
 
-            for final_types in branch_final_types:
-                branch_type = final_types.get(
-                    name
+            for branch_index in range(
+                len(branches)
+            ):
+                branch_types = (
+                    branch_final_types[
+                        branch_index
+                    ]
                 )
 
-                if branch_type is None:
+                branch_names = (
+                    branch_final_names[
+                        branch_index
+                    ]
+                )
+
+                if name not in branch_types:
                     return None
+
+                if name not in branch_names:
+                    return None
+
+                branch_type = branch_types[
+                    name
+                ]
 
                 if joined_type is None:
                     joined_type = branch_type
@@ -3549,14 +3593,13 @@ def build_native_branch_flow_helper(
             if joined_type not in NUMERIC_TYPES:
                 return None
 
-            new_joined_types[
-                name
-            ] = joined_type
+            version_numbers[name] += 1
 
-        # Déclarations C des nouvelles valeurs fusionnées.
-        for name, joined_type in (
-            new_joined_types.items()
-        ):
+            join_name = make_version_name(
+                name,
+                version_numbers[name],
+            )
+
             c_type = numeric_c_type(
                 joined_type
             )
@@ -3564,13 +3607,18 @@ def build_native_branch_flow_helper(
             if c_type is None:
                 return None
 
+            join_info[name] = {
+                "name": join_name,
+                "type": joined_type,
+                "c_type": c_type,
+            }
+
             body_lines.append(
-                f"    {c_type} "
-                f"{native_names[name]};\n"
+                f"    {c_type} {join_name};\n"
             )
 
         # ----------------------------------------------------
-        # Émission du if / else.
+        # Génération C des branches.
         # ----------------------------------------------------
 
         for branch_index, staged in enumerate(
@@ -3600,61 +3648,77 @@ def build_native_branch_flow_helper(
                     f"({condition}) {{\n"
                 )
 
+            # Versions temporaires propres à la branche.
             for assignment in staged[
                 "assignments"
             ]:
-                name = assignment["target"]
-                safe_target = assignment[
-                    "safe_target"
-                ]
-
-                if safe_target in pre_symbols:
-                    target_type = pre_symbols[
-                        safe_target
-                    ]
-                else:
-                    target_type = (
-                        new_joined_types.get(
-                            name
-                        )
-                    )
-
-                if target_type is None:
-                    return None
-
-                c_type = numeric_c_type(
-                    target_type
+                body_lines.append(
+                    f"        "
+                    f"{assignment['c_type']} "
+                    f"{assignment['name']} = "
+                    f"({assignment['c_type']})"
+                    f"({assignment['expr']});\n"
                 )
 
-                if c_type is None:
+            # Phi/join simplifié :
+            # chaque branche écrit sa valeur finale dans la
+            # nouvelle version commune.
+            for name, info_join in (
+                join_info.items()
+            ):
+                final_name = (
+                    branch_final_names[
+                        branch_index
+                    ].get(name)
+                )
+
+                final_type = (
+                    branch_final_types[
+                        branch_index
+                    ].get(name)
+                )
+
+                if (
+                    final_name is None
+                    or final_type is None
+                ):
                     return None
 
                 body_lines.append(
-                    f"        {safe_target} = "
-                    f"({c_type})"
-                    f"({assignment['expr']});\n"
+                    f"        "
+                    f"{info_join['name']} = "
+                    f"({info_join['c_type']})"
+                    f"({final_name});\n"
                 )
 
             body_lines.append(
                 "    }\n"
             )
 
-        # Après le point de jonction, les nouvelles variables
-        # prouvées deviennent disponibles pour les opérations
-        # suivantes.
-        for name, joined_type in (
-            new_joined_types.items()
-        ):
+        # ----------------------------------------------------
+        # Le résultat du join devient la version courante.
+        # ----------------------------------------------------
+
+        for name, info_join in join_info.items():
+            current_names[
+                name
+            ] = info_join["name"]
+
+            current_types[
+                name
+            ] = info_join["type"]
+
             symbols[
-                native_names[name]
-            ] = joined_type
+                info_join["name"]
+            ] = info_join["type"]
 
     # --------------------------------------------------------
     # Return final.
     # --------------------------------------------------------
 
     return_source = rewrite_source(
-        structured["return"]
+        structured["return"],
+        current_names,
     )
 
     rewritten_return = optimize_line(
@@ -3684,6 +3748,8 @@ def build_native_branch_flow_helper(
         "return_type": lowered_return[1],
         "terminal_returns": False,
     }
+
+
 
 
 
