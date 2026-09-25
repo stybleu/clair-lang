@@ -3061,51 +3061,202 @@ def build_native_while_helper(
 
         return False
 
-    def find_deferred_initializer(name):
-        # Le local n'est pas initialisé avant la boucle.
+    def branch_initializer_state(
+        name,
+        operations,
+    ):
+        """
+        Recherche la première définition sûre de name.
+
+        Retour :
+            ("none", [])
+                aucune utilisation de name ;
+
+            ("definite", [expr, ...])
+                name est forcément initialisé avant toute
+                lecture sur tous les chemins ;
+
+            ("unsafe", [])
+                lecture avant initialisation ou définition
+                seulement sur certains chemins.
+        """
+
+        for operation in operations:
+            kind = operation.get("kind")
+
+            if kind == "assign":
+                target = operation["target"]
+                expr = operation["expr"]
+
+                if target == name:
+                    if source_uses_name(
+                        expr,
+                        name,
+                    ):
+                        return "unsafe", []
+
+                    return "definite", [
+                        expr
+                    ]
+
+                if source_uses_name(
+                    expr,
+                    name,
+                ):
+                    return "unsafe", []
+
+                continue
+
+            if kind == "return":
+                if source_uses_name(
+                    operation["expr"],
+                    name,
+                ):
+                    return "unsafe", []
+
+                continue
+
+            if kind == "while":
+                if source_uses_name(
+                    operation["condition"],
+                    name,
+                ):
+                    return "unsafe", []
+
+                if any(
+                    operation_uses_name(
+                        nested,
+                        name,
+                    )
+                    for nested in operation[
+                        "operations"
+                    ]
+                ):
+                    # Une boucle interne peut faire zéro
+                    # itération : elle ne constitue donc
+                    # jamais une initialisation garantie.
+                    return "unsafe", []
+
+                continue
+
+            if kind == "if":
+                branches = operation[
+                    "branches"
+                ]
+
+                # Lire le local non initialisé dans une
+                # condition est interdit.
+                for branch in branches:
+                    condition = branch[
+                        "condition"
+                    ]
+
+                    if (
+                        condition is not None
+                        and source_uses_name(
+                            condition,
+                            name,
+                        )
+                    ):
+                        return "unsafe", []
+
+                branch_states = []
+                initializer_exprs = []
+
+                for branch in branches:
+                    state, exprs = (
+                        branch_initializer_state(
+                            name,
+                            branch[
+                                "operations"
+                            ],
+                        )
+                    )
+
+                    branch_states.append(
+                        state
+                    )
+
+                    initializer_exprs.extend(
+                        exprs
+                    )
+
+                # Si aucune branche ne touche au local,
+                # continuer après le if.
+                if all(
+                    state == "none"
+                    for state in branch_states
+                ):
+                    continue
+
+                # Pour garantir l'initialisation après le if,
+                # il faut un else final.
+                has_final_else = (
+                    bool(branches)
+                    and branches[-1][
+                        "condition"
+                    ] is None
+                )
+
+                if not has_final_else:
+                    return "unsafe", []
+
+                # Toutes les branches doivent initialiser.
+                if not all(
+                    state == "definite"
+                    for state in branch_states
+                ):
+                    return "unsafe", []
+
+                return (
+                    "definite",
+                    initializer_exprs,
+                )
+
+            if kind in (
+                "break",
+                "continue",
+            ):
+                # Ces chemins quittent la suite du bloc et
+                # ne lisent pas la variable.
+                continue
+
+            return "unsafe", []
+
+        return "none", []
+
+
+    def find_deferred_initializers(name):
+        # Le local n'existe pas encore lorsque la condition
+        # de la boucle externe est évaluée.
         if source_uses_name(
             structured["condition"],
             name,
         ):
             return None
 
-        # Si la boucle ne s'exécute jamais, le return final
-        # ne doit pas dépendre de cette variable.
+        # Si le while fait zéro itération, un return final
+        # ne doit pas lire ce local non initialisé.
         if source_uses_name(
             structured["return"],
             name,
         ):
             return None
 
-        # Première utilisation autorisée :
-        #
-        #     name = expression
-        #
-        # directement dans la boucle externe.
-        for operation in structured["operations"]:
+        state, exprs = branch_initializer_state(
+            name,
+            structured[
+                "operations"
+            ],
+        )
 
-            if (
-                operation.get("kind") == "assign"
-                and operation["target"] == name
-            ):
-                # Refuser par exemple :
-                #     j = j + 1
-                # avant toute initialisation de j.
-                if source_uses_name(
-                    operation["expr"],
-                    name,
-                ):
-                    return None
+        if state != "definite":
+            return None
 
-                return operation["expr"]
+        if not exprs:
+            return None
 
-            if operation_uses_name(
-                operation,
-                name,
-            ):
-                return None
-
-        return None
+        return exprs
 
     # --------------------------------------------------------
     # Locaux initiaux.
@@ -3188,40 +3339,64 @@ def build_native_while_helper(
             [],
         )
     ):
-        raw_expr = find_deferred_initializer(
-            local_name
-        )
-
-        if raw_expr is None:
-            return None
-
-        rewritten_source = (
-            rewrite_native_names(
-                raw_expr
+        initializer_exprs = (
+            find_deferred_initializers(
+                local_name
             )
         )
 
-        rewritten = optimize_line(
-            rewritten_source,
-            functions,
-            symbols,
-            scratch_specializations,
-            active_functions,
-            specialization_defs=None,
-            emit_helper=False,
-        )
-
-        lowered = lower_numeric_expr_c(
-            rewritten,
-            symbols,
-        )
-
-        if lowered is None:
+        if initializer_exprs is None:
             return None
 
-        typ = lowered[1]
+        initializer_types = []
 
-        if typ not in NUMERIC_TYPES:
+        for raw_expr in initializer_exprs:
+            rewritten_source = (
+                rewrite_native_names(
+                    raw_expr
+                )
+            )
+
+            rewritten = optimize_line(
+                rewritten_source,
+                functions,
+                symbols,
+                scratch_specializations,
+                active_functions,
+                specialization_defs=None,
+                emit_helper=False,
+            )
+
+            lowered = lower_numeric_expr_c(
+                rewritten,
+                symbols,
+            )
+
+            if lowered is None:
+                return None
+
+            typ = lowered[1]
+
+            if typ not in NUMERIC_TYPES:
+                return None
+
+            initializer_types.append(
+                typ
+            )
+
+        if not initializer_types:
+            return None
+
+        typ = initializer_types[0]
+
+        # Première version conservatrice :
+        # toutes les branches doivent produire exactement
+        # le même type numérique.
+        if any(
+            initializer_type != typ
+            for initializer_type
+            in initializer_types[1:]
+        ):
             return None
 
         c_type = numeric_c_type(
