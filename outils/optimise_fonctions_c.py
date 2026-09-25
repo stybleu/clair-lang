@@ -1236,6 +1236,18 @@ def parse_native_loop_assignments(
         if not stripped:
             continue
 
+        if stripped == "break;":
+            operations.append({
+                "kind": "break",
+            })
+            continue
+
+        if stripped == "continue;":
+            operations.append({
+                "kind": "continue",
+            })
+            continue
+
         assignment = re.match(
             r'([A-Za-z_][A-Za-z0-9_]*)'
             r'\s*=\s*(.+);\s*$',
@@ -1392,9 +1404,9 @@ def parse_native_while_body(block_lines):
 
         return valeur
 
-    Les structures imbriquées au-delà de ce premier niveau,
-    break/continue et nouvelles variables créées dans la
-    boucle restent volontairement refusés.
+    Les structures imbriquées au-delà de ce premier niveau
+    et les nouvelles variables créées dans la boucle restent
+    volontairement refusées. break/continue sont acceptés.
     """
 
     index = 0
@@ -1487,6 +1499,20 @@ def parse_native_while_body(block_lines):
         ].strip()
 
         if not stripped:
+            loop_index += 1
+            continue
+
+        if stripped == "break;":
+            operations.append({
+                "kind": "break",
+            })
+            loop_index += 1
+            continue
+
+        if stripped == "continue;":
+            operations.append({
+                "kind": "continue",
+            })
             loop_index += 1
             continue
 
@@ -2978,6 +3004,18 @@ def build_native_while_helper(
             "kind"
         )
 
+        if kind == "break":
+            body_lines.append(
+                "        break;\n"
+            )
+            continue
+
+        if kind == "continue":
+            body_lines.append(
+                "        continue;\n"
+            )
+            continue
+
         # Affectation simple.
         if kind == "assign":
             line = lower_assignment(
@@ -3063,10 +3101,23 @@ def build_native_while_helper(
                 for branch_operation in branch[
                     "operations"
                 ]:
-                    if (
+                    branch_kind = (
                         branch_operation.get("kind")
-                        != "assign"
-                    ):
+                    )
+
+                    if branch_kind == "break":
+                        body_lines.append(
+                            "            break;\n"
+                        )
+                        continue
+
+                    if branch_kind == "continue":
+                        body_lines.append(
+                            "            continue;\n"
+                        )
+                        continue
+
+                    if branch_kind != "assign":
                         return None
 
                     line = lower_assignment(
