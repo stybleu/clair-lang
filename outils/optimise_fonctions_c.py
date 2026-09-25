@@ -1215,6 +1215,221 @@ def parse_linear_native_body(block_lines):
     }
 
 
+
+def parse_native_while_body(block_lines):
+    """
+    Reconnaît conservativement une fonction numérique :
+
+        NvVal total = nv_int(0LL);
+        NvVal i = nv_int(0LL);
+
+        while (nv_truth(nv_lt(i, n))) {
+            total = nv_add(total, i);
+            i = nv_add(i, nv_int(1LL));
+        }
+
+        NvVal __ret9 = total;
+        return __ret9;
+
+    Les variables modifiées dans la boucle doivent avoir
+    été déclarées avant celle-ci. Les structures imbriquées,
+    break/continue et nouvelles déclarations dans la boucle
+    ne sont pas encore acceptés.
+    """
+
+    index = 0
+    locals_list = []
+    known_names = set()
+
+    def skip_blank(i):
+        while (
+            i < len(block_lines)
+            and not block_lines[i].strip()
+        ):
+            i += 1
+
+        return i
+
+    index = skip_blank(index)
+
+    # --------------------------------------------------------
+    # Locaux initialisés avant la boucle.
+    # --------------------------------------------------------
+
+    while index < len(block_lines):
+        stripped = block_lines[index].strip()
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if not local_match:
+            break
+
+        name = local_match.group(1)
+        expr = local_match.group(2)
+
+        # Le temporaire __ret appartient à la partie située
+        # après la boucle : il ne doit pas être consommé ici.
+        if re.fullmatch(r'__ret\d+', name):
+            break
+
+        if name in known_names:
+            return None
+
+        known_names.add(name)
+
+        locals_list.append(
+            (name, expr)
+        )
+
+        index += 1
+        index = skip_blank(index)
+
+    if index >= len(block_lines):
+        return None
+
+    # --------------------------------------------------------
+    # while (...)
+    # --------------------------------------------------------
+
+    while_match = re.match(
+        r'while\s*\((.*)\)\s*\{\s*$',
+        block_lines[index].strip(),
+    )
+
+    if not while_match:
+        return None
+
+    condition = while_match.group(1)
+
+    collected = collect_braced_block(
+        block_lines,
+        index,
+    )
+
+    if collected is None:
+        return None
+
+    loop_lines, close_index = collected
+    assignments = []
+
+    # --------------------------------------------------------
+    # Corps : uniquement des réaffectations simples de
+    # variables déjà créées avant la boucle.
+    # --------------------------------------------------------
+
+    for line in loop_lines:
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        assignment = re.match(
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if not assignment:
+            return None
+
+        name = assignment.group(1)
+        expr = assignment.group(2)
+
+        if name not in known_names:
+            return None
+
+        assignments.append(
+            (name, expr)
+        )
+
+    index = skip_blank(
+        close_index + 1
+    )
+
+    # --------------------------------------------------------
+    # Partie après boucle : on accepte uniquement le temporaire
+    # artificiel __retN et les return.
+    # --------------------------------------------------------
+
+    post_defs = {}
+    return_expr = None
+
+    while index < len(block_lines):
+        stripped = block_lines[index].strip()
+
+        if not stripped:
+            index += 1
+            continue
+
+        local_match = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if local_match:
+            name = local_match.group(1)
+            expr = local_match.group(2)
+
+            if not re.fullmatch(
+                r'__ret\d+',
+                name,
+            ):
+                return None
+
+            if name in post_defs:
+                return None
+
+            post_defs[name] = expr
+            index += 1
+            continue
+
+        return_match = re.match(
+            r'return\s+(.+);\s*$',
+            stripped,
+        )
+
+        if return_match:
+            expr = return_match.group(1)
+
+            if expr == "nv_none()":
+                index += 1
+                continue
+
+            if return_expr is not None:
+                return None
+
+            return_expr = expr
+            index += 1
+            continue
+
+        return None
+
+    if return_expr is None:
+        return None
+
+    return_expr = expand_local_expr(
+        return_expr,
+        post_defs,
+    )
+
+    if return_expr is None:
+        return None
+
+    return {
+        "locals": locals_list,
+        "condition": condition,
+        "assignments": assignments,
+        "return": return_expr,
+    }
+
+
 def parse_functions(lines):
     functions = {}
     i = 0
@@ -1321,6 +1536,7 @@ def parse_functions(lines):
         )
 
         conditional_native_body = None
+        while_native_body = None
 
         # D'abord essayer la forme linéaire déjà supportée.
         return_expr = parse_return_block(
@@ -1339,7 +1555,27 @@ def parse_functions(lines):
                 core
             )
 
-        if return_expr is not None:
+        # Troisième forme structurée :
+        #
+        #     locaux
+        #     while (...)
+        #         réaffectations
+        #     return ...
+        #
+        # Une boucle ne peut pas être aplatie correctement en
+        # une expression unique. Son type de retour sera donc
+        # déterminé par build_native_while_helper().
+        if return_expr is None:
+            while_native_body = (
+                parse_native_while_body(
+                    core
+                )
+            )
+
+        if (
+            return_expr is not None
+            or while_native_body is not None
+        ):
             functions[name] = {
                 "params": params,
                 "explicit_types": explicit_types,
@@ -1347,6 +1583,9 @@ def parse_functions(lines):
                 "linear_native_body": linear_native_body,
                 "conditional_native_body": (
                     conditional_native_body
+                ),
+                "while_native_body": (
+                    while_native_body
                 ),
             }
 
@@ -2331,6 +2570,274 @@ def build_native_conditional_helper(
     }
 
 
+
+def build_native_while_helper(
+    info,
+    functions,
+    param_symbols,
+    active_functions,
+    helper_name,
+):
+    """
+    Génère un helper C natif pour une boucle numérique stable.
+
+    Exemple :
+
+        long long total = 0;
+        long long i = 0;
+
+        while (i < n) {
+            total = total + i;
+            i = i + 1;
+        }
+
+        return total;
+
+    La preuve est volontairement conservatrice :
+    chaque variable réaffectée doit conserver exactement
+    son type initial à chaque écriture.
+    """
+
+    structured = info.get(
+        "while_native_body"
+    )
+
+    if structured is None:
+        return None
+
+    symbols = dict(param_symbols)
+
+    native_local_names = {}
+    native_local_types = {}
+
+    scratch_specializations = set()
+    body_lines = []
+
+    # --------------------------------------------------------
+    # Locaux initiaux.
+    # --------------------------------------------------------
+
+    for local_index, (
+        local_name,
+        raw_expr,
+    ) in enumerate(
+        structured["locals"]
+    ):
+        rewritten_source = raw_expr
+
+        for (
+            original_name,
+            native_name,
+        ) in native_local_names.items():
+            rewritten_source = replace_identifier(
+                rewritten_source,
+                original_name,
+                native_name,
+            )
+
+        rewritten = optimize_line(
+            rewritten_source,
+            functions,
+            symbols,
+            scratch_specializations,
+            active_functions,
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        lowered = lower_numeric_expr_c(
+            rewritten,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        typ = lowered[1]
+
+        if typ not in NUMERIC_TYPES:
+            return None
+
+        c_type = numeric_c_type(
+            typ
+        )
+
+        if c_type is None:
+            return None
+
+        safe_name = (
+            f"__{helper_name}_while_local_"
+            f"{local_index}_{local_name}"
+        )
+
+        body_lines.append(
+            f"    {c_type} {safe_name} = "
+            f"{lowered[0]};\n"
+        )
+
+        native_local_names[
+            local_name
+        ] = safe_name
+
+        native_local_types[
+            local_name
+        ] = typ
+
+        symbols[
+            safe_name
+        ] = typ
+
+    # --------------------------------------------------------
+    # Condition.
+    # --------------------------------------------------------
+
+    condition_source = structured[
+        "condition"
+    ]
+
+    for (
+        original_name,
+        native_name,
+    ) in native_local_names.items():
+        condition_source = replace_identifier(
+            condition_source,
+            original_name,
+            native_name,
+        )
+
+    rewritten_condition = optimize_line(
+        condition_source,
+        functions,
+        symbols,
+        scratch_specializations,
+        active_functions,
+        specialization_defs=None,
+        emit_helper=False,
+    )
+
+    lowered_condition = (
+        lower_numeric_condition_c(
+            rewritten_condition,
+            symbols,
+        )
+    )
+
+    if lowered_condition is None:
+        return None
+
+    body_lines.append(
+        f"    while ({lowered_condition}) {{\n"
+    )
+
+    # --------------------------------------------------------
+    # Back-edge : toutes les réaffectations doivent conserver
+    # exactement le même type.
+    # --------------------------------------------------------
+
+    for target, raw_expr in structured[
+        "assignments"
+    ]:
+        if target not in native_local_names:
+            return None
+
+        rewritten_source = raw_expr
+
+        for (
+            original_name,
+            native_name,
+        ) in native_local_names.items():
+            rewritten_source = replace_identifier(
+                rewritten_source,
+                original_name,
+                native_name,
+            )
+
+        rewritten = optimize_line(
+            rewritten_source,
+            functions,
+            symbols,
+            scratch_specializations,
+            active_functions,
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        lowered = lower_numeric_expr_c(
+            rewritten,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        expected_type = native_local_types[
+            target
+        ]
+
+        # Type stable sur le back-edge.
+        if lowered[1] != expected_type:
+            return None
+
+        safe_target = native_local_names[
+            target
+        ]
+
+        body_lines.append(
+            f"        {safe_target} = "
+            f"{lowered[0]};\n"
+        )
+
+    body_lines.append(
+        "    }\n"
+    )
+
+    # --------------------------------------------------------
+    # Return après la boucle.
+    # --------------------------------------------------------
+
+    return_source = structured[
+        "return"
+    ]
+
+    for (
+        original_name,
+        native_name,
+    ) in native_local_names.items():
+        return_source = replace_identifier(
+            return_source,
+            original_name,
+            native_name,
+        )
+
+    rewritten_return = optimize_line(
+        return_source,
+        functions,
+        symbols,
+        scratch_specializations,
+        active_functions,
+        specialization_defs=None,
+        emit_helper=False,
+    )
+
+    lowered_return = lower_numeric_expr_c(
+        rewritten_return,
+        symbols,
+    )
+
+    if lowered_return is None:
+        return None
+
+    if lowered_return[1] not in NUMERIC_TYPES:
+        return None
+
+    return {
+        "lines": body_lines,
+        "return_expr": lowered_return[0],
+        "return_type": lowered_return[1],
+        "terminal_returns": False,
+    }
+
+
 def inline_chunk(
     chunk,
     functions,
@@ -2435,24 +2942,135 @@ def inline_chunk(
 
     nested_specializations = set()
 
-    expr = optimize_line(
-        info["expr"],
-        functions,
-        param_symbols,
-        nested_specializations,
-        active_functions | {name},
-        specialization_defs=None,
-        emit_helper=False,
-    )
+    structured_helper = None
+    structured_terminal_returns = False
 
-    return_type = infer_expr_type(
-        expr,
-        param_symbols
-    )
+    expr = None
+    native_body = None
+    return_type = None
 
-    if return_type not in NUMERIC_TYPES:
-        return None
+    # --------------------------------------------------------
+    # Fonction contenant un while structuré.
+    #
+    # Contrairement aux fonctions linéaires/conditionnelles,
+    # elle ne peut pas être réduite à une expression unique.
+    # Le builder fournit directement le type de retour.
+    # --------------------------------------------------------
 
+    if info.get("while_native_body") is not None:
+        provisional_helper_name = (
+            f"clariox_spec_{name}_native_while"
+        )
+
+        structured_helper = (
+            build_native_while_helper(
+                info,
+                functions,
+                param_symbols,
+                active_functions | {name},
+                provisional_helper_name,
+            )
+        )
+
+        if structured_helper is None:
+            return None
+
+        return_type = structured_helper[
+            "return_type"
+        ]
+
+        if return_type not in NUMERIC_TYPES:
+            return None
+
+        # Une fonction contenant une boucle ne peut pas être
+        # textuellement inline pendant une analyse de preuve :
+        # cela supprimerait sa sémantique de boucle.
+        if not emit_helper:
+            return None
+
+        native_body = (
+            structured_helper.get(
+                "return_expr",
+                "0",
+            ),
+            return_type,
+        )
+
+    else:
+        # ----------------------------------------------------
+        # Chemin historique :
+        # fonction réductible à une expression numérique.
+        # ----------------------------------------------------
+
+        expr = optimize_line(
+            info["expr"],
+            functions,
+            param_symbols,
+            nested_specializations,
+            active_functions | {name},
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        return_type = infer_expr_type(
+            expr,
+            param_symbols
+        )
+
+        if return_type not in NUMERIC_TYPES:
+            return None
+
+        native_body = lower_numeric_expr_c(
+            expr,
+            param_symbols,
+        )
+
+        if native_body is None:
+            return None
+
+        if native_body[1] != return_type:
+            return None
+
+        structured_helper = build_native_linear_helper(
+            info,
+            functions,
+            param_symbols,
+            active_functions | {name},
+            specialization_c_name(
+                name,
+                tuple(arg_types),
+                return_type,
+            ),
+        )
+
+        if structured_helper is None:
+            structured_helper = (
+                build_native_conditional_helper(
+                    info,
+                    functions,
+                    param_symbols,
+                    active_functions | {name},
+                    specialization_c_name(
+                        name,
+                        tuple(arg_types),
+                        return_type,
+                    ),
+                )
+            )
+
+            if structured_helper is not None:
+                structured_terminal_returns = True
+
+        if (
+            structured_helper is not None
+            and structured_helper["return_type"]
+            != return_type
+        ):
+            structured_helper = None
+            structured_terminal_returns = False
+
+    # La spécialisation n'est publiée qu'après validation
+    # complète du chemin natif.
     specializations.update(
         nested_specializations
     )
@@ -2464,57 +3082,6 @@ def inline_chunk(
             return_type
         )
     )
-
-    native_body = lower_numeric_expr_c(
-        expr,
-        param_symbols,
-    )
-
-    if native_body is None:
-        return None
-
-    if native_body[1] != return_type:
-        return None
-
-    structured_helper = build_native_linear_helper(
-        info,
-        functions,
-        param_symbols,
-        active_functions | {name},
-        specialization_c_name(
-            name,
-            tuple(arg_types),
-            return_type,
-        ),
-    )
-
-    structured_terminal_returns = False
-
-    if structured_helper is None:
-        structured_helper = (
-            build_native_conditional_helper(
-                info,
-                functions,
-                param_symbols,
-                active_functions | {name},
-                specialization_c_name(
-                    name,
-                    tuple(arg_types),
-                    return_type,
-                ),
-            )
-        )
-
-        if structured_helper is not None:
-            structured_terminal_returns = True
-
-    if (
-        structured_helper is not None
-        and structured_helper["return_type"]
-        != return_type
-    ):
-        structured_helper = None
-        structured_terminal_returns = False
 
     # --------------------------------------------------------
     # Lors d'une analyse de preuve (while/fixed-point), garder
