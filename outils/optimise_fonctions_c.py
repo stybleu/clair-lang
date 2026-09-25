@@ -1216,25 +1216,185 @@ def parse_linear_native_body(block_lines):
 
 
 
+def parse_native_loop_assignments(
+    block_lines,
+    known_names,
+):
+    """
+    Analyse un bloc interne de boucle/condition.
+
+    Pour cette première version structurée, seules les
+    réaffectations de variables déjà déclarées avant le
+    while sont acceptées.
+    """
+
+    operations = []
+
+    for line in block_lines:
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        assignment = re.match(
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if not assignment:
+            return None
+
+        target = assignment.group(1)
+        expr = assignment.group(2)
+
+        if target not in known_names:
+            return None
+
+        operations.append({
+            "kind": "assign",
+            "target": target,
+            "expr": expr,
+        })
+
+    return operations
+
+
+def parse_native_while_if_chain(
+    lines,
+    start_index,
+    known_names,
+):
+    """
+    Analyse :
+
+        if (...) {
+            ...
+        }
+        else if (...) {
+            ...
+        }
+        else {
+            ...
+        }
+
+    Le else final est optionnel.
+    """
+
+    branches = []
+    index = start_index
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        condition_match = re.match(
+            r'^(?:if|else\s+if)'
+            r'\s*\((.*)\)\s*\{\s*$',
+            stripped,
+        )
+
+        else_match = re.match(
+            r'^else\s*\{\s*$',
+            stripped,
+        )
+
+        if condition_match:
+            condition = condition_match.group(1)
+
+        elif else_match:
+            if not branches:
+                return None
+
+            condition = None
+
+        else:
+            break
+
+        collected = collect_braced_block(
+            lines,
+            index,
+        )
+
+        if collected is None:
+            return None
+
+        branch_lines, close_index = collected
+
+        branch_operations = (
+            parse_native_loop_assignments(
+                branch_lines,
+                known_names,
+            )
+        )
+
+        if branch_operations is None:
+            return None
+
+        branches.append({
+            "condition": condition,
+            "operations": branch_operations,
+        })
+
+        index = close_index + 1
+
+        while (
+            index < len(lines)
+            and not lines[index].strip()
+        ):
+            index += 1
+
+        if condition is None:
+            break
+
+        if index >= len(lines):
+            break
+
+        next_line = lines[index].strip()
+
+        if not (
+            re.match(
+                r'^else\s+if\s*\(',
+                next_line,
+            )
+            or re.match(
+                r'^else\s*\{\s*$',
+                next_line,
+            )
+        ):
+            break
+
+    if not branches:
+        return None
+
+    return {
+        "kind": "if",
+        "branches": branches,
+    }, index
+
+
 def parse_native_while_body(block_lines):
     """
     Reconnaît conservativement une fonction numérique :
 
-        NvVal total = nv_int(0LL);
-        NvVal i = nv_int(0LL);
+        locaux initiaux
 
-        while (nv_truth(nv_lt(i, n))) {
-            total = nv_add(total, i);
-            i = nv_add(i, nv_int(1LL));
-        }
+        while condition:
+            affectations
 
-        NvVal __ret9 = total;
-        return __ret9;
+            if condition:
+                affectations
+            elif condition:
+                affectations
+            else:
+                affectations
 
-    Les variables modifiées dans la boucle doivent avoir
-    été déclarées avant celle-ci. Les structures imbriquées,
-    break/continue et nouvelles déclarations dans la boucle
-    ne sont pas encore acceptés.
+            affectations
+
+        return valeur
+
+    Les structures imbriquées au-delà de ce premier niveau,
+    break/continue et nouvelles variables créées dans la
+    boucle restent volontairement refusés.
     """
 
     index = 0
@@ -1253,7 +1413,7 @@ def parse_native_while_body(block_lines):
     index = skip_blank(index)
 
     # --------------------------------------------------------
-    # Locaux initialisés avant la boucle.
+    # Variables locales initiales.
     # --------------------------------------------------------
 
     while index < len(block_lines):
@@ -1272,8 +1432,6 @@ def parse_native_while_body(block_lines):
         name = local_match.group(1)
         expr = local_match.group(2)
 
-        # Le temporaire __ret appartient à la partie située
-        # après la boucle : il ne doit pas être consommé ici.
         if re.fullmatch(r'__ret\d+', name):
             break
 
@@ -1293,7 +1451,7 @@ def parse_native_while_body(block_lines):
         return None
 
     # --------------------------------------------------------
-    # while (...)
+    # while.
     # --------------------------------------------------------
 
     while_match = re.match(
@@ -1315,19 +1473,53 @@ def parse_native_while_body(block_lines):
         return None
 
     loop_lines, close_index = collected
-    assignments = []
 
     # --------------------------------------------------------
-    # Corps : uniquement des réaffectations simples de
-    # variables déjà créées avant la boucle.
+    # Corps structuré de la boucle.
     # --------------------------------------------------------
 
-    for line in loop_lines:
-        stripped = line.strip()
+    operations = []
+    loop_index = 0
+
+    while loop_index < len(loop_lines):
+        stripped = loop_lines[
+            loop_index
+        ].strip()
 
         if not stripped:
+            loop_index += 1
             continue
 
+        # if / else if / else
+        if re.match(
+            r'^if\s*\(',
+            stripped,
+        ):
+            parsed = parse_native_while_if_chain(
+                loop_lines,
+                loop_index,
+                known_names,
+            )
+
+            if parsed is None:
+                return None
+
+            operation, loop_index = parsed
+
+            operations.append(
+                operation
+            )
+
+            continue
+
+        # Un else isolé est invalide.
+        if re.match(
+            r'^else\b',
+            stripped,
+        ):
+            return None
+
+        # Affectation simple.
         assignment = re.match(
             r'([A-Za-z_][A-Za-z0-9_]*)'
             r'\s*=\s*(.+);\s*$',
@@ -1337,23 +1529,26 @@ def parse_native_while_body(block_lines):
         if not assignment:
             return None
 
-        name = assignment.group(1)
+        target = assignment.group(1)
         expr = assignment.group(2)
 
-        if name not in known_names:
+        if target not in known_names:
             return None
 
-        assignments.append(
-            (name, expr)
-        )
+        operations.append({
+            "kind": "assign",
+            "target": target,
+            "expr": expr,
+        })
+
+        loop_index += 1
 
     index = skip_blank(
         close_index + 1
     )
 
     # --------------------------------------------------------
-    # Partie après boucle : on accepte uniquement le temporaire
-    # artificiel __retN et les return.
+    # Return après la boucle.
     # --------------------------------------------------------
 
     post_defs = {}
@@ -1425,9 +1620,10 @@ def parse_native_while_body(block_lines):
     return {
         "locals": locals_list,
         "condition": condition,
-        "assignments": assignments,
+        "operations": operations,
         "return": return_expr,
     }
+
 
 
 def parse_functions(lines):
@@ -2579,23 +2775,11 @@ def build_native_while_helper(
     helper_name,
 ):
     """
-    Génère un helper C natif pour une boucle numérique stable.
+    Produit une boucle C native structurée pouvant contenir
+    des affectations et un premier niveau de if/elif/else.
 
-    Exemple :
-
-        long long total = 0;
-        long long i = 0;
-
-        while (i < n) {
-            total = total + i;
-            i = i + 1;
-        }
-
-        return total;
-
-    La preuve est volontairement conservatrice :
-    chaque variable réaffectée doit conserver exactement
-    son type initial à chaque écriture.
+    Toute réaffectation doit conserver exactement le type
+    numérique initial de la variable.
     """
 
     structured = info.get(
@@ -2614,6 +2798,74 @@ def build_native_while_helper(
     body_lines = []
 
     # --------------------------------------------------------
+    # Utilitaires.
+    # --------------------------------------------------------
+
+    def rewrite_native_names(source):
+        result = source
+
+        for (
+            original_name,
+            native_name,
+        ) in native_local_names.items():
+            result = replace_identifier(
+                result,
+                original_name,
+                native_name,
+            )
+
+        return result
+
+    def lower_assignment(
+        target,
+        raw_expr,
+        indent,
+    ):
+        if target not in native_local_names:
+            return None
+
+        rewritten_source = (
+            rewrite_native_names(
+                raw_expr
+            )
+        )
+
+        rewritten = optimize_line(
+            rewritten_source,
+            functions,
+            symbols,
+            scratch_specializations,
+            active_functions,
+            specialization_defs=None,
+            emit_helper=False,
+        )
+
+        lowered = lower_numeric_expr_c(
+            rewritten,
+            symbols,
+        )
+
+        if lowered is None:
+            return None
+
+        expected_type = (
+            native_local_types[target]
+        )
+
+        # Preuve de stabilité de type.
+        if lowered[1] != expected_type:
+            return None
+
+        safe_target = (
+            native_local_names[target]
+        )
+
+        return (
+            f"{indent}{safe_target} = "
+            f"{lowered[0]};\n"
+        )
+
+    # --------------------------------------------------------
     # Locaux initiaux.
     # --------------------------------------------------------
 
@@ -2623,17 +2875,11 @@ def build_native_while_helper(
     ) in enumerate(
         structured["locals"]
     ):
-        rewritten_source = raw_expr
-
-        for (
-            original_name,
-            native_name,
-        ) in native_local_names.items():
-            rewritten_source = replace_identifier(
-                rewritten_source,
-                original_name,
-                native_name,
+        rewritten_source = (
+            rewrite_native_names(
+                raw_expr
             )
+        )
 
         rewritten = optimize_line(
             rewritten_source,
@@ -2688,22 +2934,14 @@ def build_native_while_helper(
         ] = typ
 
     # --------------------------------------------------------
-    # Condition.
+    # Condition while.
     # --------------------------------------------------------
 
-    condition_source = structured[
-        "condition"
-    ]
-
-    for (
-        original_name,
-        native_name,
-    ) in native_local_names.items():
-        condition_source = replace_identifier(
-            condition_source,
-            original_name,
-            native_name,
+    condition_source = (
+        rewrite_native_names(
+            structured["condition"]
         )
+    )
 
     rewritten_condition = optimize_line(
         condition_source,
@@ -2730,84 +2968,141 @@ def build_native_while_helper(
     )
 
     # --------------------------------------------------------
-    # Back-edge : toutes les réaffectations doivent conserver
-    # exactement le même type.
+    # Corps structuré.
     # --------------------------------------------------------
 
-    for target, raw_expr in structured[
-        "assignments"
+    for operation in structured[
+        "operations"
     ]:
-        if target not in native_local_names:
-            return None
+        kind = operation.get(
+            "kind"
+        )
 
-        rewritten_source = raw_expr
-
-        for (
-            original_name,
-            native_name,
-        ) in native_local_names.items():
-            rewritten_source = replace_identifier(
-                rewritten_source,
-                original_name,
-                native_name,
+        # Affectation simple.
+        if kind == "assign":
+            line = lower_assignment(
+                operation["target"],
+                operation["expr"],
+                "        ",
             )
 
-        rewritten = optimize_line(
-            rewritten_source,
-            functions,
-            symbols,
-            scratch_specializations,
-            active_functions,
-            specialization_defs=None,
-            emit_helper=False,
-        )
+            if line is None:
+                return None
 
-        lowered = lower_numeric_expr_c(
-            rewritten,
-            symbols,
-        )
+            body_lines.append(
+                line
+            )
 
-        if lowered is None:
-            return None
+            continue
 
-        expected_type = native_local_types[
-            target
-        ]
+        # if / else if / else.
+        if kind == "if":
+            branches = operation[
+                "branches"
+            ]
 
-        # Type stable sur le back-edge.
-        if lowered[1] != expected_type:
-            return None
+            for branch_index, branch in enumerate(
+                branches
+            ):
+                raw_condition = branch[
+                    "condition"
+                ]
 
-        safe_target = native_local_names[
-            target
-        ]
+                if raw_condition is None:
+                    if branch_index == 0:
+                        return None
 
-        body_lines.append(
-            f"        {safe_target} = "
-            f"{lowered[0]};\n"
-        )
+                    body_lines.append(
+                        "        else {\n"
+                    )
+
+                else:
+                    condition_source = (
+                        rewrite_native_names(
+                            raw_condition
+                        )
+                    )
+
+                    rewritten_branch_condition = (
+                        optimize_line(
+                            condition_source,
+                            functions,
+                            symbols,
+                            scratch_specializations,
+                            active_functions,
+                            specialization_defs=None,
+                            emit_helper=False,
+                        )
+                    )
+
+                    lowered_branch_condition = (
+                        lower_numeric_condition_c(
+                            rewritten_branch_condition,
+                            symbols,
+                        )
+                    )
+
+                    if (
+                        lowered_branch_condition
+                        is None
+                    ):
+                        return None
+
+                    keyword = (
+                        "if"
+                        if branch_index == 0
+                        else "else if"
+                    )
+
+                    body_lines.append(
+                        f"        {keyword} "
+                        f"({lowered_branch_condition}) "
+                        "{\n"
+                    )
+
+                for branch_operation in branch[
+                    "operations"
+                ]:
+                    if (
+                        branch_operation.get("kind")
+                        != "assign"
+                    ):
+                        return None
+
+                    line = lower_assignment(
+                        branch_operation["target"],
+                        branch_operation["expr"],
+                        "            ",
+                    )
+
+                    if line is None:
+                        return None
+
+                    body_lines.append(
+                        line
+                    )
+
+                body_lines.append(
+                    "        }\n"
+                )
+
+            continue
+
+        return None
 
     body_lines.append(
         "    }\n"
     )
 
     # --------------------------------------------------------
-    # Return après la boucle.
+    # Return.
     # --------------------------------------------------------
 
-    return_source = structured[
-        "return"
-    ]
-
-    for (
-        original_name,
-        native_name,
-    ) in native_local_names.items():
-        return_source = replace_identifier(
-            return_source,
-            original_name,
-            native_name,
+    return_source = (
+        rewrite_native_names(
+            structured["return"]
         )
+    )
 
     rewritten_return = optimize_line(
         return_source,
@@ -2836,6 +3131,7 @@ def build_native_while_helper(
         "return_type": lowered_return[1],
         "terminal_returns": False,
     }
+
 
 
 def inline_chunk(
