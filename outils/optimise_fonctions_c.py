@@ -1227,6 +1227,7 @@ def parse_native_loop_assignments(
         - réaffectation d'un local numérique existant ;
         - break ;
         - continue ;
+        - return numérique anticipé ;
         - if / elif / else imbriqués.
 
     Les nouvelles variables créées dans la boucle restent
@@ -1254,6 +1255,80 @@ def parse_native_loop_assignments(
             operations.append({
                 "kind": "continue",
             })
+            index += 1
+            continue
+
+        # Return généré par Clariox via un temporaire :
+        #
+        #     NvVal __ret8 = expression;
+        #     return __ret8;
+        #
+        return_temp = re.match(
+            r'NvVal\s+'
+            r'(__ret\d+)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if return_temp:
+            temp_name = return_temp.group(1)
+            return_expr = return_temp.group(2)
+
+            next_index = index + 1
+
+            while (
+                next_index < len(block_lines)
+                and not block_lines[
+                    next_index
+                ].strip()
+            ):
+                next_index += 1
+
+            if next_index >= len(block_lines):
+                return None
+
+            return_line = re.match(
+                r'return\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*;\s*$',
+                block_lines[
+                    next_index
+                ].strip(),
+            )
+
+            if (
+                return_line is None
+                or return_line.group(1)
+                != temp_name
+            ):
+                return None
+
+            operations.append({
+                "kind": "return",
+                "expr": return_expr,
+            })
+
+            index = next_index + 1
+            continue
+
+        # Return direct, utile si une autre étape
+        # d'optimisation a déjà supprimé le temporaire.
+        direct_return = re.match(
+            r'return\s+(.+);\s*$',
+            stripped,
+        )
+
+        if direct_return:
+            return_expr = direct_return.group(1)
+
+            if return_expr == "nv_none()":
+                return None
+
+            operations.append({
+                "kind": "return",
+                "expr": return_expr,
+            })
+
             index += 1
             continue
 
@@ -2794,6 +2869,10 @@ def build_native_while_helper(
     scratch_specializations = set()
     body_lines = []
 
+    # Types rencontrés dans les return anticipés.
+    # Ils seront fusionnés avec le type du return final.
+    early_return_types = []
+
     # --------------------------------------------------------
     # Utilitaires.
     # --------------------------------------------------------
@@ -2996,6 +3075,50 @@ def build_native_while_helper(
                 )
                 continue
 
+            if kind == "return":
+                return_source = (
+                    rewrite_native_names(
+                        operation["expr"]
+                    )
+                )
+
+                rewritten_return = optimize_line(
+                    return_source,
+                    functions,
+                    symbols,
+                    scratch_specializations,
+                    active_functions,
+                    specialization_defs=None,
+                    emit_helper=False,
+                )
+
+                lowered_return = (
+                    lower_numeric_expr_c(
+                        rewritten_return,
+                        symbols,
+                    )
+                )
+
+                if lowered_return is None:
+                    return False
+
+                if (
+                    lowered_return[1]
+                    not in NUMERIC_TYPES
+                ):
+                    return False
+
+                early_return_types.append(
+                    lowered_return[1]
+                )
+
+                body_lines.append(
+                    f"{indent}return "
+                    f"{lowered_return[0]};\n"
+                )
+
+                continue
+
             if kind == "assign":
                 line = lower_assignment(
                     operation["target"],
@@ -3134,10 +3257,21 @@ def build_native_while_helper(
     if lowered_return[1] not in NUMERIC_TYPES:
         return None
 
+    result_type = lowered_return[1]
+
+    for early_type in early_return_types:
+        result_type = promote(
+            result_type,
+            early_type,
+        )
+
+        if result_type not in NUMERIC_TYPES:
+            return None
+
     return {
         "lines": body_lines,
         "return_expr": lowered_return[0],
-        "return_type": lowered_return[1],
+        "return_type": result_type,
         "terminal_returns": False,
     }
 
