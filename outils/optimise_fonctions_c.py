@@ -1228,6 +1228,7 @@ def parse_native_loop_assignments(
         - break ;
         - continue ;
         - return numérique anticipé ;
+        - while imbriqué ;
         - if / elif / else imbriqués.
 
     Les nouvelles variables créées dans la boucle restent
@@ -1330,6 +1331,42 @@ def parse_native_loop_assignments(
             })
 
             index += 1
+            continue
+
+        # Boucle while imbriquée.
+        nested_while = re.match(
+            r'^while\s*\((.*)\)\s*\{\s*$',
+            stripped,
+        )
+
+        if nested_while:
+            collected = collect_braced_block(
+                block_lines,
+                index,
+            )
+
+            if collected is None:
+                return None
+
+            nested_lines, close_index = collected
+
+            nested_operations = (
+                parse_native_loop_assignments(
+                    nested_lines,
+                    known_names,
+                )
+            )
+
+            if nested_operations is None:
+                return None
+
+            operations.append({
+                "kind": "while",
+                "condition": nested_while.group(1),
+                "operations": nested_operations,
+            })
+
+            index = close_index + 1
             continue
 
         # Condition imbriquée.
@@ -3131,6 +3168,52 @@ def build_native_while_helper(
 
                 body_lines.append(
                     line
+                )
+
+                continue
+
+            if kind == "while":
+                condition_source = (
+                    rewrite_native_names(
+                        operation["condition"]
+                    )
+                )
+
+                rewritten_loop_condition = (
+                    optimize_line(
+                        condition_source,
+                        functions,
+                        symbols,
+                        scratch_specializations,
+                        active_functions,
+                        specialization_defs=None,
+                        emit_helper=False,
+                    )
+                )
+
+                lowered_loop_condition = (
+                    lower_numeric_condition_c(
+                        rewritten_loop_condition,
+                        symbols,
+                    )
+                )
+
+                if lowered_loop_condition is None:
+                    return False
+
+                body_lines.append(
+                    f"{indent}while "
+                    f"({lowered_loop_condition}) {{\n"
+                )
+
+                if not emit_operations(
+                    operation["operations"],
+                    child_indent,
+                ):
+                    return False
+
+                body_lines.append(
+                    f"{indent}}}\n"
                 )
 
                 continue
