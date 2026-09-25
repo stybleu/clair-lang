@@ -1221,33 +1221,72 @@ def parse_native_loop_assignments(
     known_names,
 ):
     """
-    Analyse un bloc interne de boucle/condition.
+    Analyse récursivement un bloc interne de while natif.
 
-    Pour cette première version structurée, seules les
-    réaffectations de variables déjà déclarées avant le
-    while sont acceptées.
+    Opérations acceptées :
+        - réaffectation d'un local numérique existant ;
+        - break ;
+        - continue ;
+        - if / elif / else imbriqués.
+
+    Les nouvelles variables créées dans la boucle restent
+    volontairement refusées.
     """
 
     operations = []
+    index = 0
 
-    for line in block_lines:
-        stripped = line.strip()
+    while index < len(block_lines):
+        stripped = block_lines[index].strip()
 
         if not stripped:
+            index += 1
             continue
 
         if stripped == "break;":
             operations.append({
                 "kind": "break",
             })
+            index += 1
             continue
 
         if stripped == "continue;":
             operations.append({
                 "kind": "continue",
             })
+            index += 1
             continue
 
+        # Condition imbriquée.
+        if re.match(
+            r'^if\s*\(',
+            stripped,
+        ):
+            parsed = parse_native_while_if_chain(
+                block_lines,
+                index,
+                known_names,
+            )
+
+            if parsed is None:
+                return None
+
+            operation, index = parsed
+
+            operations.append(
+                operation
+            )
+
+            continue
+
+        # Un elif/else sans if correspondant est invalide.
+        if re.match(
+            r'^else\b',
+            stripped,
+        ):
+            return None
+
+        # Réaffectation numérique.
         assignment = re.match(
             r'([A-Za-z_][A-Za-z0-9_]*)'
             r'\s*=\s*(.+);\s*$',
@@ -1268,6 +1307,8 @@ def parse_native_loop_assignments(
             "target": target,
             "expr": expr,
         })
+
+        index += 1
 
     return operations
 
@@ -1404,9 +1445,9 @@ def parse_native_while_body(block_lines):
 
         return valeur
 
-    Les structures imbriquées au-delà de ce premier niveau
-    et les nouvelles variables créées dans la boucle restent
-    volontairement refusées. break/continue sont acceptés.
+    Les conditions imbriquées, break et continue sont
+    acceptés récursivement. Les nouvelles variables créées
+    dans la boucle restent volontairement refusées.
     """
 
     index = 0
@@ -1490,84 +1531,13 @@ def parse_native_while_body(block_lines):
     # Corps structuré de la boucle.
     # --------------------------------------------------------
 
-    operations = []
-    loop_index = 0
+    operations = parse_native_loop_assignments(
+        loop_lines,
+        known_names,
+    )
 
-    while loop_index < len(loop_lines):
-        stripped = loop_lines[
-            loop_index
-        ].strip()
-
-        if not stripped:
-            loop_index += 1
-            continue
-
-        if stripped == "break;":
-            operations.append({
-                "kind": "break",
-            })
-            loop_index += 1
-            continue
-
-        if stripped == "continue;":
-            operations.append({
-                "kind": "continue",
-            })
-            loop_index += 1
-            continue
-
-        # if / else if / else
-        if re.match(
-            r'^if\s*\(',
-            stripped,
-        ):
-            parsed = parse_native_while_if_chain(
-                loop_lines,
-                loop_index,
-                known_names,
-            )
-
-            if parsed is None:
-                return None
-
-            operation, loop_index = parsed
-
-            operations.append(
-                operation
-            )
-
-            continue
-
-        # Un else isolé est invalide.
-        if re.match(
-            r'^else\b',
-            stripped,
-        ):
-            return None
-
-        # Affectation simple.
-        assignment = re.match(
-            r'([A-Za-z_][A-Za-z0-9_]*)'
-            r'\s*=\s*(.+);\s*$',
-            stripped,
-        )
-
-        if not assignment:
-            return None
-
-        target = assignment.group(1)
-        expr = assignment.group(2)
-
-        if target not in known_names:
-            return None
-
-        operations.append({
-            "kind": "assign",
-            "target": target,
-            "expr": expr,
-        })
-
-        loop_index += 1
+    if operations is None:
+        return None
 
     index = skip_blank(
         close_index + 1
@@ -2802,7 +2772,8 @@ def build_native_while_helper(
 ):
     """
     Produit une boucle C native structurée pouvant contenir
-    des affectations et un premier niveau de if/elif/else.
+    des affectations, break/continue et des if/elif/else
+    imbriqués récursivement.
 
     Toute réaffectation doit conserver exactement le type
     numérique initial de la variable.
@@ -2997,148 +2968,135 @@ def build_native_while_helper(
     # Corps structuré.
     # --------------------------------------------------------
 
-    for operation in structured[
-        "operations"
-    ]:
-        kind = operation.get(
-            "kind"
-        )
+    def emit_operations(
+        operations,
+        indent,
+    ):
+        """
+        Émet récursivement les opérations structurées
+        d'un while numérique natif.
+        """
 
-        if kind == "break":
-            body_lines.append(
-                "        break;\n"
-            )
-            continue
+        child_indent = indent + "    "
 
-        if kind == "continue":
-            body_lines.append(
-                "        continue;\n"
-            )
-            continue
-
-        # Affectation simple.
-        if kind == "assign":
-            line = lower_assignment(
-                operation["target"],
-                operation["expr"],
-                "        ",
+        for operation in operations:
+            kind = operation.get(
+                "kind"
             )
 
-            if line is None:
-                return None
-
-            body_lines.append(
-                line
-            )
-
-            continue
-
-        # if / else if / else.
-        if kind == "if":
-            branches = operation[
-                "branches"
-            ]
-
-            for branch_index, branch in enumerate(
-                branches
-            ):
-                raw_condition = branch[
-                    "condition"
-                ]
-
-                if raw_condition is None:
-                    if branch_index == 0:
-                        return None
-
-                    body_lines.append(
-                        "        else {\n"
-                    )
-
-                else:
-                    condition_source = (
-                        rewrite_native_names(
-                            raw_condition
-                        )
-                    )
-
-                    rewritten_branch_condition = (
-                        optimize_line(
-                            condition_source,
-                            functions,
-                            symbols,
-                            scratch_specializations,
-                            active_functions,
-                            specialization_defs=None,
-                            emit_helper=False,
-                        )
-                    )
-
-                    lowered_branch_condition = (
-                        lower_numeric_condition_c(
-                            rewritten_branch_condition,
-                            symbols,
-                        )
-                    )
-
-                    if (
-                        lowered_branch_condition
-                        is None
-                    ):
-                        return None
-
-                    keyword = (
-                        "if"
-                        if branch_index == 0
-                        else "else if"
-                    )
-
-                    body_lines.append(
-                        f"        {keyword} "
-                        f"({lowered_branch_condition}) "
-                        "{\n"
-                    )
-
-                for branch_operation in branch[
-                    "operations"
-                ]:
-                    branch_kind = (
-                        branch_operation.get("kind")
-                    )
-
-                    if branch_kind == "break":
-                        body_lines.append(
-                            "            break;\n"
-                        )
-                        continue
-
-                    if branch_kind == "continue":
-                        body_lines.append(
-                            "            continue;\n"
-                        )
-                        continue
-
-                    if branch_kind != "assign":
-                        return None
-
-                    line = lower_assignment(
-                        branch_operation["target"],
-                        branch_operation["expr"],
-                        "            ",
-                    )
-
-                    if line is None:
-                        return None
-
-                    body_lines.append(
-                        line
-                    )
-
+            if kind == "break":
                 body_lines.append(
-                    "        }\n"
+                    f"{indent}break;\n"
+                )
+                continue
+
+            if kind == "continue":
+                body_lines.append(
+                    f"{indent}continue;\n"
+                )
+                continue
+
+            if kind == "assign":
+                line = lower_assignment(
+                    operation["target"],
+                    operation["expr"],
+                    indent,
                 )
 
-            continue
+                if line is None:
+                    return False
 
+                body_lines.append(
+                    line
+                )
+
+                continue
+
+            if kind == "if":
+                branches = operation[
+                    "branches"
+                ]
+
+                for (
+                    branch_index,
+                    branch,
+                ) in enumerate(branches):
+                    raw_condition = branch[
+                        "condition"
+                    ]
+
+                    if raw_condition is None:
+                        if branch_index == 0:
+                            return False
+
+                        body_lines.append(
+                            f"{indent}else {{\n"
+                        )
+
+                    else:
+                        condition_source = (
+                            rewrite_native_names(
+                                raw_condition
+                            )
+                        )
+
+                        rewritten_branch_condition = (
+                            optimize_line(
+                                condition_source,
+                                functions,
+                                symbols,
+                                scratch_specializations,
+                                active_functions,
+                                specialization_defs=None,
+                                emit_helper=False,
+                            )
+                        )
+
+                        lowered_branch_condition = (
+                            lower_numeric_condition_c(
+                                rewritten_branch_condition,
+                                symbols,
+                            )
+                        )
+
+                        if (
+                            lowered_branch_condition
+                            is None
+                        ):
+                            return False
+
+                        keyword = (
+                            "if"
+                            if branch_index == 0
+                            else "else if"
+                        )
+
+                        body_lines.append(
+                            f"{indent}{keyword} "
+                            f"({lowered_branch_condition}) "
+                            "{\n"
+                        )
+
+                    if not emit_operations(
+                        branch["operations"],
+                        child_indent,
+                    ):
+                        return False
+
+                    body_lines.append(
+                        f"{indent}}}\n"
+                    )
+
+                continue
+
+            return False
+
+        return True
+
+    if not emit_operations(
+        structured["operations"],
+        "        ",
+    ):
         return None
 
     body_lines.append(
