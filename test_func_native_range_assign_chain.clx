@@ -1,0 +1,15 @@
+fn range_assign_chain(n: int) -> float:
+    if n < 0 or n > 100:
+        return 0.0
+    else:
+        first = n + 20
+    value = first - 5
+    i = 0
+    while i < 1:
+        value = value + 0.5
+        i = i + 1
+    return value
+
+print(range_assign_chain(0))
+print(range_assign_chain(100))
+print(range_assign_chain(101))

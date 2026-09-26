@@ -3610,6 +3610,188 @@ def build_native_branch_flow_helper(
     SAFE_PROMOTED_INT = 999999
     float_exact_int_names = set()
 
+    # Plages entières garanties pour les identifiants C courants.
+    # Elles complètent le simple drapeau "convertible en double"
+    # afin de propager une preuve à travers des affectations comme :
+    #
+    #     n in [0, 100]
+    #     x = n + 10      -> x in [10, 110]
+    #     y = x - 5       -> y in [5, 105]
+    #
+    # La première version ne suit volontairement que les opérations
+    # entières simples dont les bornes sont faciles à prouver.
+    int_range_facts = {}
+    INT64_MIN = -(1 << 63)
+    INT64_MAX = (1 << 63) - 1
+
+    def valid_int_range(low, high):
+        return (
+            low is not None
+            and high is not None
+            and low <= high
+            and low >= INT64_MIN
+            and high <= INT64_MAX
+        )
+
+    def infer_int_range_expr(
+        source,
+        mapping,
+        facts=None,
+    ):
+        facts = (
+            int_range_facts
+            if facts is None
+            else facts
+        )
+
+        source = strip_outer_parens(
+            source.strip()
+        )
+
+        inner = unwrap(
+            source,
+            "nv_int",
+        )
+
+        if inner is not None:
+            return infer_int_range_expr(
+                inner,
+                mapping,
+                facts,
+            )
+
+        literal_match = re.fullmatch(
+            r'(-?\d+)(?:LL)?',
+            source,
+        )
+
+        if literal_match:
+            value = int(
+                literal_match.group(1)
+            )
+
+            if INT64_MIN <= value <= INT64_MAX:
+                return (value, value)
+
+            return None
+
+        name_match = re.fullmatch(
+            r'[A-Za-z_][A-Za-z0-9_]*',
+            source,
+        )
+
+        if name_match:
+            source_name = name_match.group(0)
+            c_name = mapping.get(
+                source_name,
+                source_name,
+            )
+            return facts.get(c_name)
+
+        inner = unwrap(
+            source,
+            "nv_neg",
+        )
+
+        if inner is not None:
+            bounds = infer_int_range_expr(
+                inner,
+                mapping,
+                facts,
+            )
+
+            if bounds is None:
+                return None
+
+            low, high = bounds
+            result = (-high, -low)
+
+            if valid_int_range(*result):
+                return result
+
+            return None
+
+        for fn in ("nv_add", "nv_sub"):
+            inner = unwrap(
+                source,
+                fn,
+            )
+
+            if inner is None:
+                continue
+
+            args = split_args(inner)
+
+            if len(args) != 2:
+                return None
+
+            left = infer_int_range_expr(
+                args[0],
+                mapping,
+                facts,
+            )
+            right = infer_int_range_expr(
+                args[1],
+                mapping,
+                facts,
+            )
+
+            if left is None or right is None:
+                return None
+
+            if fn == "nv_add":
+                result = (
+                    left[0] + right[0],
+                    left[1] + right[1],
+                )
+            else:
+                result = (
+                    left[0] - right[1],
+                    left[1] - right[0],
+                )
+
+            if valid_int_range(*result):
+                return result
+
+            return None
+
+        conditional = split_top_level_ternary(
+            source
+        )
+
+        if conditional is not None:
+            _, yes_expr, no_expr = conditional
+            yes_range = infer_int_range_expr(
+                yes_expr,
+                mapping,
+                facts,
+            )
+            no_range = infer_int_range_expr(
+                no_expr,
+                mapping,
+                facts,
+            )
+
+            if yes_range is None or no_range is None:
+                return None
+
+            result = (
+                min(yes_range[0], no_range[0]),
+                max(yes_range[1], no_range[1]),
+            )
+
+            if valid_int_range(*result):
+                return result
+
+        return None
+
+    def range_is_safe_for_float(bounds):
+        return (
+            bounds is not None
+            and bounds[0] >= -SAFE_PROMOTED_INT
+            and bounds[1] <= SAFE_PROMOTED_INT
+        )
+
     def source_is_float_exact_int(
         source,
         mapping,
@@ -4034,6 +4216,72 @@ def build_native_branch_flow_helper(
                 and high <= SAFE_DOUBLE_INT
             ):
                 result.add(name)
+
+        return result
+
+    def refine_range_facts(
+        facts,
+        updates,
+    ):
+        result = dict(facts)
+
+        for name, (low, high) in updates.items():
+            current = result.get(name)
+
+            if current is not None:
+                cur_low, cur_high = current
+
+                if low is None:
+                    low = cur_low
+                elif cur_low is not None:
+                    low = max(low, cur_low)
+
+                if high is None:
+                    high = cur_high
+                elif cur_high is not None:
+                    high = min(high, cur_high)
+
+            if (
+                low is not None
+                and high is not None
+                and low <= high
+            ):
+                result[name] = (low, high)
+
+        return result
+
+    def common_range_facts(branches):
+        if not branches:
+            return {}
+
+        common_names = None
+
+        for branch in branches:
+            names = set(
+                branch.get(
+                    "range_facts",
+                    {},
+                )
+            )
+
+            if common_names is None:
+                common_names = names
+            else:
+                common_names &= names
+
+        result = {}
+
+        for name in common_names or ():
+            bounds = [
+                branch["range_facts"][name]
+                for branch in branches
+            ]
+
+            low = min(bound[0] for bound in bounds)
+            high = max(bound[1] for bound in bounds)
+
+            if valid_int_range(low, high):
+                result[name] = (low, high)
 
         return result
 
@@ -4994,11 +5242,25 @@ def build_native_branch_flow_helper(
                 if c_type is None:
                     return None
 
-                expr_float_exact = (
-                    expr_type == "int"
-                    and source_is_float_exact_int(
+                expr_range = (
+                    infer_int_range_expr(
                         raw_expr,
                         current_names,
+                    )
+                    if expr_type == "int"
+                    else None
+                )
+
+                expr_float_exact = (
+                    expr_type == "int"
+                    and (
+                        range_is_safe_for_float(
+                            expr_range
+                        )
+                        or source_is_float_exact_int(
+                            raw_expr,
+                            current_names,
+                        )
                     )
                 )
 
@@ -5024,6 +5286,11 @@ def build_native_branch_flow_helper(
                 symbols[
                     temp_name
                 ] = expr_type
+
+                if expr_range is not None:
+                    int_range_facts[
+                        temp_name
+                    ] = expr_range
 
                 if expr_float_exact:
                     float_exact_int_names.add(
@@ -5152,35 +5419,61 @@ def build_native_branch_flow_helper(
             exact_before_branch = set(
                 float_exact_int_names
             )
+            ranges_before_branch = dict(
+                int_range_facts
+            )
 
             branch_exact = set()
+            branch_ranges = dict(
+                ranges_before_branch
+            )
 
             # Pour une branche conditionnelle, toutes les
             # conditions précédentes sont fausses et la condition
             # courante est vraie. Pour le else, toutes les
             # conditions précédentes sont fausses.
             for previous in prior_conditions:
+                previous_ranges = condition_int_ranges(
+                    previous,
+                    pre_names,
+                    pre_symbols,
+                    False,
+                )
+                branch_ranges = refine_range_facts(
+                    branch_ranges,
+                    previous_ranges,
+                )
                 branch_exact.update(
-                    exact_int_names_from_condition(
-                        previous,
-                        pre_names,
-                        pre_symbols,
-                        False,
-                    )
+                    name
+                    for name, bounds
+                    in branch_ranges.items()
+                    if range_is_safe_for_float(bounds)
                 )
 
             if raw_condition is not None:
+                current_ranges = condition_int_ranges(
+                    raw_condition,
+                    pre_names,
+                    pre_symbols,
+                    True,
+                )
+                branch_ranges = refine_range_facts(
+                    branch_ranges,
+                    current_ranges,
+                )
                 branch_exact.update(
-                    exact_int_names_from_condition(
-                        raw_condition,
-                        pre_names,
-                        pre_symbols,
-                        True,
-                    )
+                    name
+                    for name, bounds
+                    in branch_ranges.items()
+                    if range_is_safe_for_float(bounds)
                 )
 
             float_exact_int_names.update(
                 branch_exact
+            )
+            int_range_facts.clear()
+            int_range_facts.update(
+                branch_ranges
             )
 
             compiled = compile_operations(
@@ -5199,6 +5492,10 @@ def build_native_branch_flow_helper(
                 float_exact_int_names.update(
                     exact_before_branch
                 )
+                int_range_facts.clear()
+                int_range_facts.update(
+                    ranges_before_branch
+                )
                 return None
 
             (
@@ -5212,10 +5509,17 @@ def build_native_branch_flow_helper(
             branch_exact_names = set(
                 float_exact_int_names
             )
+            branch_range_facts = dict(
+                int_range_facts
+            )
 
             float_exact_int_names.clear()
             float_exact_int_names.update(
                 exact_before_branch
+            )
+            int_range_facts.clear()
+            int_range_facts.update(
+                ranges_before_branch
             )
 
             staged.append({
@@ -5226,6 +5530,7 @@ def build_native_branch_flow_helper(
                 "symbols": branch_symbols,
                 "falls_through": branch_falls_through,
                 "exact_names": branch_exact_names,
+                "range_facts": branch_range_facts,
             })
 
             if raw_condition is not None:
@@ -5338,20 +5643,60 @@ def build_native_branch_flow_helper(
                 "c_type": c_type,
             }
 
-            if (
-                joined_type == "int"
-                and all(
-                    branch["names"].get(name)
-                    in branch.get(
-                        "exact_names",
-                        (),
+            joined_range = None
+
+            if joined_type == "int":
+                branch_bounds = []
+
+                for branch in continuing:
+                    branch_name = branch[
+                        "names"
+                    ].get(name)
+                    bounds = branch.get(
+                        "range_facts",
+                        {},
+                    ).get(branch_name)
+
+                    if bounds is None:
+                        branch_bounds = []
+                        break
+
+                    branch_bounds.append(bounds)
+
+                if branch_bounds:
+                    candidate = (
+                        min(
+                            bounds[0]
+                            for bounds in branch_bounds
+                        ),
+                        max(
+                            bounds[1]
+                            for bounds in branch_bounds
+                        ),
                     )
-                    for branch in continuing
-                )
-            ):
-                float_exact_int_names.add(
-                    join_name
-                )
+
+                    if valid_int_range(*candidate):
+                        joined_range = candidate
+                        int_range_facts[
+                            join_name
+                        ] = candidate
+
+                if (
+                    range_is_safe_for_float(
+                        joined_range
+                    )
+                    or all(
+                        branch["names"].get(name)
+                        in branch.get(
+                            "exact_names",
+                            (),
+                        )
+                        for branch in continuing
+                    )
+                ):
+                    float_exact_int_names.add(
+                        join_name
+                    )
 
         result_lines = []
 
@@ -5486,6 +5831,21 @@ def build_native_branch_flow_helper(
                     common_exact
                 )
 
+            common_ranges = common_range_facts(
+                continuing
+            )
+
+            if common_ranges:
+                int_range_facts.update(
+                    common_ranges
+                )
+                float_exact_int_names.update(
+                    name
+                    for name, bounds
+                    in common_ranges.items()
+                    if range_is_safe_for_float(bounds)
+                )
+
         return (
             result_lines,
             output_names,
@@ -5552,16 +5912,29 @@ def build_native_branch_flow_helper(
             safe_name
         ] = typ
 
-        if (
-            typ == "int"
-            and source_is_float_exact_int(
+        if typ == "int":
+            expr_range = infer_int_range_expr(
                 raw_expr,
                 current_names,
             )
-        ):
-            float_exact_int_names.add(
-                safe_name
-            )
+
+            if expr_range is not None:
+                int_range_facts[
+                    safe_name
+                ] = expr_range
+
+            if (
+                range_is_safe_for_float(
+                    expr_range
+                )
+                or source_is_float_exact_int(
+                    raw_expr,
+                    current_names,
+                )
+            ):
+                float_exact_int_names.add(
+                    safe_name
+                )
 
     compiled = compile_operations(
         structured["operations"],

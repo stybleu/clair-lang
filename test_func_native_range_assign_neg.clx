@@ -1,0 +1,13 @@
+fn range_assign_neg(n: int) -> float:
+    if n < -100 or n > 100:
+        return 0.0
+    else:
+        value = -n
+    i = 0
+    while i < 1:
+        value = value + 0.5
+        i = i + 1
+    return value
+
+print(range_assign_neg(-100))
+print(range_assign_neg(100))

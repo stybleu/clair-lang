@@ -1,0 +1,11 @@
+fn range_assign_overflow_fallback(n: int) -> float:
+    if n < 999990 or n > 999999:
+        return 0.0
+    else:
+        value = n + 10
+    while value < 0:
+        value = value + 0.5
+    return value
+
+print(range_assign_overflow_fallback(999999))
+print(range_assign_overflow_fallback(1000000))
