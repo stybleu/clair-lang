@@ -1,0 +1,9 @@
+fn widen_counter(n: int) -> float:
+    i = 0
+    while i < n:
+        i = i + 0.5
+    return i
+
+print(widen_counter(0))
+print(widen_counter(1))
+print(widen_counter(3))

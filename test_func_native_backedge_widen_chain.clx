@@ -1,0 +1,14 @@
+fn widen_chain(n: int) -> float:
+    a = 0
+    b = 0
+    i = 0
+    while i < n:
+        a = b
+        b = b + 0.5
+        i = i + 1
+    return a + b
+
+print(widen_chain(0))
+print(widen_chain(1))
+print(widen_chain(2))
+print(widen_chain(5))

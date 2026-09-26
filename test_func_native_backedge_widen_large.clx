@@ -1,0 +1,10 @@
+fn widen_large(n: int):
+    value = 9007199254740993
+    i = 0
+    while i < n:
+        value = value + 0.5
+        i = i + 1
+    return value
+
+print(widen_large(0))
+print(widen_large(1))

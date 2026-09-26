@@ -1,0 +1,13 @@
+fn widen_early(n: int) -> float:
+    total = 0
+    i = 0
+    while i < n:
+        total = total + 0.5
+        if total > 1:
+            return total
+        i = i + 1
+    return total
+
+print(widen_early(0))
+print(widen_early(2))
+print(widen_early(10))

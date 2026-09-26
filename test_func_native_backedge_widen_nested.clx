@@ -1,0 +1,15 @@
+fn widen_nested(n: int) -> float:
+    total = 0
+    i = 0
+    j = 0
+    while i < n:
+        j = 0
+        while j < 2:
+            total = total + 0.25
+            j = j + 1
+        i = i + 1
+    return total
+
+print(widen_nested(0))
+print(widen_nested(1))
+print(widen_nested(3))

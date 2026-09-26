@@ -1,0 +1,14 @@
+fn widen_dynamic(n: int):
+    value = 0
+    i = 0
+    while i < n:
+        if i == 1:
+            value = "dynamic"
+        else:
+            value = value + 0.5
+        i = i + 1
+    return value
+
+print(widen_dynamic(0))
+print(widen_dynamic(1))
+print(widen_dynamic(2))

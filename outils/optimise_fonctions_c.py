@@ -3583,6 +3583,91 @@ def build_native_branch_flow_helper(
     temp_counter = [0]
     loop_counter = [0]
 
+    # Identifiants C contenant un entier dont la conversion vers
+    # double est prouvée exacte. Cette provenance protège les
+    # promotions de back-edge contre la perte de précision avant
+    # la première itération (notamment lorsque le while exécute
+    # zéro fois).
+    float_exact_int_names = set()
+
+    def source_is_float_exact_int(
+        source,
+        mapping,
+    ):
+        source = strip_outer_parens(
+            source.strip()
+        )
+
+        inner = unwrap(
+            source,
+            "nv_int",
+        )
+
+        if inner is not None:
+            source = strip_outer_parens(
+                inner.strip()
+            )
+
+        literal_match = re.fullmatch(
+            r'(-?\d+)(?:LL)?',
+            source,
+        )
+
+        if literal_match:
+            value = int(
+                literal_match.group(1)
+            )
+
+            return abs(value) <= (1 << 53)
+
+        name_match = re.fullmatch(
+            r'[A-Za-z_][A-Za-z0-9_]*',
+            source,
+        )
+
+        if name_match:
+            source_name = name_match.group(0)
+            c_name = mapping.get(
+                source_name,
+                source_name,
+            )
+
+            return (
+                c_name
+                in float_exact_int_names
+            )
+
+        inner = unwrap(
+            source,
+            "nv_neg",
+        )
+
+        if inner is not None:
+            return source_is_float_exact_int(
+                inner,
+                mapping,
+            )
+
+        conditional = split_top_level_ternary(
+            source
+        )
+
+        if conditional is not None:
+            _, yes_expr, no_expr = conditional
+
+            return (
+                source_is_float_exact_int(
+                    yes_expr,
+                    mapping,
+                )
+                and source_is_float_exact_int(
+                    no_expr,
+                    mapping,
+                )
+            )
+
+        return False
+
     def make_version_name(
         source_name,
         version,
@@ -3726,13 +3811,176 @@ def build_native_branch_flow_helper(
         return result
 
     # --------------------------------------------------------
-    # Validation d'un corps de boucle avec types de stockage
-    # fixes.
+    # Inférence à point fixe des types de stockage de boucle.
     #
-    # Une boucle mixte SSA ne peut pas encore élargir son
-    # stockage sur une back-edge : float -> int est permis
-    # par conversion vers float, mais int -> float exige déjà
-    # un stockage float à l'entrée de la boucle.
+    # Une variable matérialisée pour une back-edge peut être
+    # élargie de int vers float lorsque le corps de la boucle
+    # prouve qu'une valeur flottante peut lui être affectée.
+    #
+    # La propagation est récursive et répétée jusqu'à stabilité
+    # afin de couvrir les dépendances telles que :
+    #
+    #     a = b
+    #     b = b + 0.5
+    #
+    # où b devient float au premier passage d'analyse puis a au
+    # suivant. Aucun rétrécissement float -> int n'est effectué.
+    # --------------------------------------------------------
+
+    def infer_loop_storage_types(
+        operations,
+        mapping,
+        initial_types,
+        symbols,
+    ):
+        inferred = dict(
+            initial_types
+        )
+
+        # Chaque variable ne peut changer qu'une fois :
+        # int -> float. Quelques passes supplémentaires servent
+        # uniquement à propager les dépendances en chaîne.
+        max_passes = max(
+            2,
+            len(inferred) + 2,
+        )
+
+        for _ in range(max_passes):
+            changed = False
+            unresolved = False
+
+            pass_symbols = dict(
+                symbols
+            )
+
+            for name, typ in inferred.items():
+                mapped_name = mapping.get(
+                    name
+                )
+
+                if mapped_name is not None:
+                    pass_symbols[
+                        mapped_name
+                    ] = typ
+
+            def scan(scan_operations):
+                nonlocal changed
+                nonlocal unresolved
+
+                for operation in scan_operations:
+                    kind = operation.get(
+                        "kind"
+                    )
+
+                    if kind in {
+                        "break",
+                        "continue",
+                        "return",
+                    }:
+                        continue
+
+                    if kind == "assign":
+                        target = operation[
+                            "target"
+                        ]
+
+                        if (
+                            target not in inferred
+                            or target not in mapping
+                        ):
+                            return False
+
+                        lowered = lower_expr(
+                            operation["expr"],
+                            mapping,
+                            pass_symbols,
+                        )
+
+                        if (
+                            lowered is None
+                            or lowered[1]
+                            not in NUMERIC_TYPES
+                        ):
+                            # Une dépendance peut devenir
+                            # résoluble après une promotion
+                            # découverte plus loin dans ce tour.
+                            unresolved = True
+                            continue
+
+                        next_type = promote(
+                            inferred[target],
+                            lowered[1],
+                        )
+
+                        if (
+                            next_type
+                            not in NUMERIC_TYPES
+                        ):
+                            return False
+
+                        if (
+                            next_type
+                            != inferred[target]
+                        ):
+                            inferred[target] = (
+                                next_type
+                            )
+
+                            pass_symbols[
+                                mapping[target]
+                            ] = next_type
+
+                            changed = True
+
+                        continue
+
+                    if kind == "if":
+                        for branch in operation[
+                            "branches"
+                        ]:
+                            if not scan(
+                                branch[
+                                    "operations"
+                                ]
+                            ):
+                                return False
+
+                        continue
+
+                    if kind == "while":
+                        if not scan(
+                            operation[
+                                "operations"
+                            ]
+                        ):
+                            return False
+
+                        continue
+
+                    return False
+
+                return True
+
+            if not scan(operations):
+                return None
+
+            if not changed:
+                if unresolved:
+                    return None
+
+                return inferred
+
+        # Avec seulement int -> float, dépasser cette borne
+        # indiquerait un état d'inférence incohérent.
+        return None
+
+    # --------------------------------------------------------
+    # Validation d'un corps de boucle après stabilisation des
+    # types de stockage.
+    #
+    # L'analyse à point fixe précédente peut élargir un stockage
+    # int vers float. À ce stade, chaque affectation doit tenir
+    # dans le type final choisi pour la back-edge.
     # --------------------------------------------------------
 
     def validate_loop_operations(
@@ -4105,6 +4353,9 @@ def build_native_branch_flow_helper(
             ),
         )
 
+        # Première étape : réserver les noms de stockage avec
+        # les types d'entrée. Les types C définitifs seront
+        # choisis après l'analyse à point fixe du corps.
         for name in ordered_names:
             if (
                 name not in pre_names
@@ -4119,22 +4370,8 @@ def build_native_branch_flow_helper(
             if typ not in NUMERIC_TYPES:
                 return None
 
-            c_type = numeric_c_type(
-                typ
-            )
-
-            if c_type is None:
-                return None
-
             mutable_name = make_loop_name(
                 name
-            )
-
-            prefix_lines.append(
-                f"{indent}{c_type} "
-                f"{mutable_name} = "
-                f"({c_type})"
-                f"({pre_names[name]});\n"
             )
 
             loop_names[
@@ -4148,6 +4385,59 @@ def build_native_branch_flow_helper(
             loop_symbols[
                 mutable_name
             ] = typ
+
+        promoted_types = infer_loop_storage_types(
+            operation["operations"],
+            loop_names,
+            loop_types,
+            loop_symbols,
+        )
+
+        if promoted_types is None:
+            return None
+
+        loop_types = promoted_types
+
+        # Une conversion int -> float est sûre à l'entrée du
+        # while seulement si la valeur entière courante est
+        # exactement représentable en double. Sans cette preuve,
+        # garder le chemin dynamique évite de modifier la valeur
+        # lors d'un while à zéro itération.
+        for name in ordered_names:
+            if (
+                pre_types[name] == "int"
+                and loop_types[name] == "float"
+                and pre_names[name]
+                not in float_exact_int_names
+            ):
+                return None
+
+        for name in ordered_names:
+            typ = loop_types[
+                name
+            ]
+
+            mutable_name = loop_names[
+                name
+            ]
+
+            loop_symbols[
+                mutable_name
+            ] = typ
+
+            c_type = numeric_c_type(
+                typ
+            )
+
+            if c_type is None:
+                return None
+
+            prefix_lines.append(
+                f"{indent}{c_type} "
+                f"{mutable_name} = "
+                f"({c_type})"
+                f"({pre_names[name]});\n"
+            )
 
         lowered_condition = lower_condition(
             operation["condition"],
@@ -4334,6 +4624,14 @@ def build_native_branch_flow_helper(
                 if c_type is None:
                     return None
 
+                expr_float_exact = (
+                    expr_type == "int"
+                    and source_is_float_exact_int(
+                        raw_expr,
+                        current_names,
+                    )
+                )
+
                 temp_name = make_temp_name(
                     target
                 )
@@ -4356,6 +4654,11 @@ def build_native_branch_flow_helper(
                 symbols[
                     temp_name
                 ] = expr_type
+
+                if expr_float_exact:
+                    float_exact_int_names.add(
+                        temp_name
+                    )
 
                 continue
 
@@ -4607,6 +4910,18 @@ def build_native_branch_flow_helper(
                 "c_type": c_type,
             }
 
+            if (
+                joined_type == "int"
+                and all(
+                    branch["names"].get(name)
+                    in float_exact_int_names
+                    for branch in continuing
+                )
+            ):
+                float_exact_int_names.add(
+                    join_name
+                )
+
         result_lines = []
 
         for name, join in joined.items():
@@ -4759,6 +5074,17 @@ def build_native_branch_flow_helper(
         symbols[
             safe_name
         ] = typ
+
+        if (
+            typ == "int"
+            and source_is_float_exact_int(
+                raw_expr,
+                current_names,
+            )
+        ):
+            float_exact_int_names.add(
+                safe_name
+            )
 
     compiled = compile_operations(
         structured["operations"],
