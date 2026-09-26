@@ -1,0 +1,29 @@
+n = 1000000
+passes = 6
+
+seed = 123456789
+total = 0
+
+for pass_i in range(passes):
+    state = seed + pass_i * 7919
+    subtotal = 0
+
+    for item_i in range(n):
+        state = (state * 1664525 + 1013904223) % 2147483647
+        value = state % 1000000
+
+        if value % 3 == 0:
+            subtotal = subtotal + value * 3 + item_i % 97
+        elif value % 5 == 0:
+            subtotal = subtotal + value * 2 + item_i % 89
+        elif value % 7 == 0:
+            subtotal = subtotal + value + item_i % 83
+        else:
+            subtotal = subtotal + value % 1000 + item_i % 79
+
+    total = (
+        total +
+        subtotal % 1000000007
+    ) % 1000000007
+
+print("Checksum :", total)

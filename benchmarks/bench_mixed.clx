@@ -1,0 +1,79 @@
+fn native_mix(v: int, idx: int) -> int:
+    if v % 11 == 0:
+        return v * 5 + idx % 101
+    elif v % 7 == 0:
+        return v * 3 + idx % 89
+    elif v % 5 == 0:
+        return v * 2 + idx % 83
+    else:
+        return v + idx % 79
+
+
+n = 600000
+passes = 8
+seed = 123456789
+
+total = 0
+
+for pass_i in range(passes):
+    state = seed + pass_i * 7919
+    subtotal = 0
+
+    poly = 0
+
+    for item_i in range(n):
+        state = (
+            state * 1664525 +
+            1013904223
+        ) % 2147483647
+
+        value = state % 1000000
+
+        mixed = native_mix(value, item_i)
+
+        mode = value % 4
+
+        if mode == 0:
+            poly = mixed
+        elif mode == 1:
+            poly = mixed / 2.0
+        elif mode == 2:
+            poly = mixed + 0.5
+        else:
+            poly = mixed * 1.0
+
+        p = int(poly)
+
+        branch = item_i % 3
+
+        if branch == 0:
+            subtotal = (
+                subtotal +
+                p +
+                value % 97
+            )
+        elif branch == 1:
+            subtotal = (
+                subtotal +
+                p +
+                mixed % 89
+            )
+        else:
+            subtotal = (
+                subtotal +
+                p +
+                item_i % 83
+            )
+
+        if p % 2 == 0:
+            subtotal = subtotal + 3
+        else:
+            subtotal = subtotal + 1
+
+    total = (
+        total +
+        subtotal % 1000000007
+    ) % 1000000007
+
+
+print("Checksum :", total)

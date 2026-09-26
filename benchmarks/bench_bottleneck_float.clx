@@ -1,0 +1,8 @@
+n = 50000000
+total = 0.0
+
+for i in range(n):
+    poly = i + 0.5
+    total = total + poly
+
+print("Checksum :", total)

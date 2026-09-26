@@ -1,0 +1,14 @@
+n = 5000000
+
+total = 0
+poly = 0
+
+for i in range(n):
+    if i % 2 == 0:
+        poly = i
+    else:
+        poly = i + 0.5
+
+    total = total + int(poly)
+
+print("Checksum :", total)
