@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import re
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -577,6 +578,76 @@ def lower_flow_number(
         return (
             f"((double)({a[0]}) / (double)({b[0]}))",
             "double",
+        )
+
+    # FLOW_NATIVE_MOD_V1
+    #
+    # Abaissement conservateur du modulo entier.
+    #
+    # Pour préserver l'erreur Clariox de division par zéro,
+    # cette première version n'accepte qu'un diviseur entier
+    # littéral et statiquement non nul.
+    inner = unwrap(expr, "nv_mod")
+
+    if inner is not None:
+        args = split_args(inner)
+
+        if len(args) != 2:
+            return None
+
+        a = lower_flow_number(
+            args[0],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        b = lower_flow_number(
+            args[1],
+            native_ints,
+            native_floats,
+            dynamic_types,
+        )
+
+        if (
+            a is None
+            or b is None
+            or a[1] != "int"
+            or b[1] != "int"
+        ):
+            return None
+
+        raw_divisor = strip_outer(args[1])
+
+        divisor_inner = unwrap(
+            raw_divisor,
+            "nv_int",
+        )
+
+        if divisor_inner is not None:
+            raw_divisor = strip_outer(
+                divisor_inner
+            )
+
+        literal_divisor = re.fullmatch(
+            r'(-?\d+)(?:LL)?',
+            raw_divisor,
+        )
+
+        if literal_divisor is None:
+            return None
+
+        divisor_value = int(
+            literal_divisor.group(1)
+        )
+
+        if divisor_value == 0:
+            return None
+
+        return (
+            f"((long long)({a[0]}) % "
+            f"(long long)({b[0]}))",
+            "int",
         )
 
     return None
@@ -2719,6 +2790,929 @@ def repair(lines):
     # - abandon immédiat si le RHS n'est pas entièrement compris.
     # --------------------------------------------------------
 
+    def simplify_native_int_builtin_dispatch(source_lines):
+        """
+        Simplifie un appel dynamique int() lorsque son argument
+        a déjà été abaissé en numérique C natif.
+
+        Avant :
+
+            NvVal value = ({
+                NvCall __c = nv_call_new();
+                nv_call_add(&__c, nv_float(poly));
+                NvVal __r = nv_dispatch_call(
+                    "int",
+                    __c.args,
+                    __c.argc,
+                    __c.kw
+                );
+                nv_call_free(&__c);
+                __r;
+            });
+
+        Après :
+
+            NvVal value =
+                nv_integer_from_double((double)(poly));
+
+        nv_integer_from_double() est volontairement conservé :
+        il maintient les contrôles de finitude, de plage et la
+        sémantique entière du runtime.
+        """
+
+        optimized = []
+        rewritten = 0
+
+        pattern = re.compile(
+            r'^(\s*)'
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*'
+            r'\(\{\s*'
+            r'NvCall\s+__c\s*=\s*nv_call_new\(\);\s*'
+            r'nv_call_add\('
+            r'&__c,\s*'
+            r'nv_float\((.*?)\)'
+            r'\);\s*'
+            r'NvVal\s+__r\s*=\s*'
+            r'nv_dispatch_call\('
+            r'"int",\s*'
+            r'__c\.args,\s*'
+            r'__c\.argc,\s*'
+            r'__c\.kw'
+            r'\);\s*'
+            r'nv_call_free\(&__c\);\s*'
+            r'__r;\s*'
+            r'\}\);\s*$'
+        )
+
+        for source_line in source_lines:
+            match = pattern.match(source_line)
+
+            if not match:
+                optimized.append(source_line)
+                continue
+
+            indent = match.group(1)
+            name = match.group(2)
+            argument = match.group(3).strip()
+
+            lowered = lower_flow_number(
+                argument,
+                native_ints,
+                native_floats,
+                {},
+            )
+
+            if lowered is None:
+                optimized.append(source_line)
+                continue
+
+            source_line = (
+                f"{indent}NvVal {name} = "
+                f"nv_integer_from_double("
+                f"(double)({lowered[0]}));\n"
+            )
+
+            optimized.append(source_line)
+            rewritten += 1
+
+        return optimized, rewritten
+
+
+    def promote_proven_int_from_double(source_lines):
+        """
+        Abaisse :
+
+            NvVal p = nv_integer_from_double((double)(x));
+
+        en :
+
+            long long p = (long long)(x);
+
+        uniquement lorsque l'analyse de plage prouve que x
+        reste dans une plage finie et sûre.
+
+        La limite volontaire de +/- (2**53 - 1) est plus
+        conservative que la plage int64. Elle évite toute
+        ambiguïté de représentation aux frontières du double.
+        """
+
+        SAFE_FLOAT_INT = (1 << 53) - 1
+
+        def clean_expr(expr):
+            expr = expr.strip()
+
+            previous = None
+
+            while previous != expr:
+                previous = expr
+
+                expr = re.sub(
+                    r'\(\s*(?:long long|double)\s*\)',
+                    '',
+                    expr,
+                )
+
+                expr = strip_outer(expr)
+
+            return expr.strip()
+
+        def split_binary(expr, operators):
+            expr = clean_expr(expr)
+
+            depth = 0
+
+            for index in range(len(expr) - 1, -1, -1):
+                ch = expr[index]
+
+                if ch == ')':
+                    depth += 1
+                    continue
+
+                if ch == '(':
+                    depth -= 1
+                    continue
+
+                if depth != 0 or ch not in operators:
+                    continue
+
+                if ch in '+-':
+                    if index == 0:
+                        continue
+
+                    previous = expr[index - 1]
+
+                    if previous in '(,+-*/%':
+                        continue
+
+                    # signe d'exposant : 1e-3
+                    if previous in 'eE':
+                        continue
+
+                return (
+                    expr[:index].strip(),
+                    ch,
+                    expr[index + 1:].strip(),
+                )
+
+            return None
+
+        helper_defs = {}
+
+        current_helper = None
+        helper_depth = 0
+
+        helper_header = re.compile(
+            r'^\s*static\s+'
+            r'(?:__attribute__\(\(noinline\)\)\s+)?'
+            r'long long\s+'
+            r'(clariox_spec_[A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*\((.*?)\)\s*\{'
+        )
+
+        for source_line in source_lines:
+            if current_helper is None:
+                match = helper_header.match(source_line)
+
+                if match:
+                    helper_name = match.group(1)
+                    raw_params = split_args(match.group(2))
+                    params = []
+
+                    for raw_param in raw_params:
+                        words = raw_param.strip().split()
+
+                        if words:
+                            params.append(words[-1])
+
+                    helper_defs[helper_name] = {
+                        "params": params,
+                        "returns": [],
+                    }
+
+                    current_helper = helper_name
+                    helper_depth = (
+                        source_line.count("{")
+                        - source_line.count("}")
+                    )
+
+                continue
+
+            return_match = re.search(
+                r'\breturn\s+(.*?)\s*;',
+                source_line,
+            )
+
+            if return_match:
+                helper_defs[current_helper][
+                    "returns"
+                ].append(
+                    return_match.group(1).strip()
+                )
+
+            helper_depth += (
+                source_line.count("{")
+                - source_line.count("}")
+            )
+
+            if helper_depth <= 0:
+                current_helper = None
+                helper_depth = 0
+
+        def union_bounds(a, b):
+            if a is None:
+                return b
+
+            if b is None:
+                return a
+
+            return (
+                min(a[0], b[0]),
+                max(a[1], b[1]),
+            )
+
+        def eval_range(expr, facts, stack=None):
+            if stack is None:
+                stack = set()
+
+            expr = clean_expr(expr)
+
+            literal = re.fullmatch(
+                r'[-+]?'
+                r'(?:'
+                r'\d+(?:\.\d*)?'
+                r'|\.\d+'
+                r')'
+                r'(?:[eE][+-]?\d+)?'
+                r'(?:LL)?',
+                expr,
+            )
+
+            if literal:
+                raw = expr
+
+                if raw.endswith("LL"):
+                    raw = raw[:-2]
+
+                try:
+                    if (
+                        "." in raw
+                        or "e" in raw.lower()
+                    ):
+                        value = float(raw)
+                    else:
+                        value = int(raw)
+                except ValueError:
+                    return None
+
+                return (value, value)
+
+            if re.fullmatch(
+                r'[A-Za-z_][A-Za-z0-9_]*',
+                expr,
+            ):
+                return facts.get(expr)
+
+            if expr.startswith("-"):
+                inner = eval_range(
+                    expr[1:],
+                    facts,
+                    stack,
+                )
+
+                if inner is None:
+                    return None
+
+                return (-inner[1], -inner[0])
+
+            split = split_binary(expr, "+-")
+
+            if split is not None:
+                left_expr, op, right_expr = split
+
+                left = eval_range(
+                    left_expr,
+                    facts,
+                    stack,
+                )
+                right = eval_range(
+                    right_expr,
+                    facts,
+                    stack,
+                )
+
+                if left is None or right is None:
+                    return None
+
+                if op == "+":
+                    return (
+                        left[0] + right[0],
+                        left[1] + right[1],
+                    )
+
+                return (
+                    left[0] - right[1],
+                    left[1] - right[0],
+                )
+
+            split = split_binary(expr, "*/%")
+
+            if split is not None:
+                left_expr, op, right_expr = split
+
+                left = eval_range(
+                    left_expr,
+                    facts,
+                    stack,
+                )
+                right = eval_range(
+                    right_expr,
+                    facts,
+                    stack,
+                )
+
+                if op == "%":
+                    if (
+                        right is None
+                        or right[0] != right[1]
+                    ):
+                        return None
+
+                    modulus = abs(right[0])
+
+                    if modulus == 0:
+                        return None
+
+                    limit = modulus - 1
+
+                    if left is None:
+                        return (-limit, limit)
+
+                    if left[0] >= 0:
+                        return (0, limit)
+
+                    if left[1] <= 0:
+                        return (-limit, 0)
+
+                    return (-limit, limit)
+
+                if left is None or right is None:
+                    return None
+
+                if op == "*":
+                    products = (
+                        left[0] * right[0],
+                        left[0] * right[1],
+                        left[1] * right[0],
+                        left[1] * right[1],
+                    )
+
+                    return (
+                        min(products),
+                        max(products),
+                    )
+
+                # division
+                if right[0] <= 0 <= right[1]:
+                    return None
+
+                quotients = (
+                    left[0] / right[0],
+                    left[0] / right[1],
+                    left[1] / right[0],
+                    left[1] / right[1],
+                )
+
+                return (
+                    min(quotients),
+                    max(quotients),
+                )
+
+            call = re.fullmatch(
+                r'(clariox_spec_'
+                r'[A-Za-z_][A-Za-z0-9_]*)'
+                r'\((.*)\)',
+                expr,
+            )
+
+            if call:
+                helper_name = call.group(1)
+
+                if (
+                    helper_name not in helper_defs
+                    or helper_name in stack
+                ):
+                    return None
+
+                info = helper_defs[helper_name]
+                args = split_args(call.group(2))
+
+                if len(args) != len(info["params"]):
+                    return None
+
+                local_facts = dict(facts)
+
+                for param, argument in zip(
+                    info["params"],
+                    args,
+                ):
+                    local_facts[param] = eval_range(
+                        argument,
+                        facts,
+                        stack,
+                    )
+
+                result = None
+                child_stack = set(stack)
+                child_stack.add(helper_name)
+
+                for return_expr in info["returns"]:
+                    bounds = eval_range(
+                        return_expr,
+                        local_facts,
+                        child_stack,
+                    )
+
+                    if bounds is None:
+                        return None
+
+                    result = union_bounds(
+                        result,
+                        bounds,
+                    )
+
+                return result
+
+            return None
+
+        facts = {}
+        unknown = set()
+
+        declaration = re.compile(
+            r'^\s*(long long|double)\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.*?)\s*;\s*$'
+        )
+
+        assignment = re.compile(
+            r'^\s*'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.*?)\s*;\s*$'
+        )
+
+        def record(name, bounds):
+            # Les compteurs de range sont loop-carried.
+            # Ne jamais déduire leur plage par un seul passage
+            # linéaire.
+            if name.startswith("clariox_range_"):
+                facts.pop(name, None)
+                unknown.add(name)
+                return
+
+            if bounds is None:
+                facts.pop(name, None)
+                unknown.add(name)
+                return
+
+            if name in unknown:
+                return
+
+            if name in facts:
+                facts[name] = union_bounds(
+                    facts[name],
+                    bounds,
+                )
+            else:
+                facts[name] = bounds
+
+        for source_line in source_lines:
+            match = declaration.match(source_line)
+
+            if match:
+                name = match.group(2)
+                rhs = match.group(3)
+
+                record(
+                    name,
+                    eval_range(rhs, facts),
+                )
+                continue
+
+            match = assignment.match(source_line)
+
+            if match:
+                name = match.group(1)
+
+                if (
+                    name not in facts
+                    and name not in unknown
+                ):
+                    continue
+
+                rhs = match.group(2)
+
+                record(
+                    name,
+                    eval_range(rhs, facts),
+                )
+
+        optimized = []
+        promoted = []
+
+        nv_decl = re.compile(
+            r'^(\s*)NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.*?)\s*;\s*$'
+        )
+
+        for source_line in source_lines:
+            match = nv_decl.match(source_line)
+
+            if not match:
+                optimized.append(source_line)
+                continue
+
+            indent = match.group(1)
+            name = match.group(2)
+            rhs = match.group(3)
+
+            inner = unwrap(
+                rhs,
+                "nv_integer_from_double",
+            )
+
+            if inner is None:
+                optimized.append(source_line)
+                continue
+
+            numeric_expr = clean_expr(inner)
+            bounds = eval_range(
+                numeric_expr,
+                facts,
+            )
+
+            if bounds is None:
+                optimized.append(source_line)
+                continue
+
+            low, high = bounds
+
+            if not (
+                math.isfinite(float(low))
+                and math.isfinite(float(high))
+                and low >= -SAFE_FLOAT_INT
+                and high <= SAFE_FLOAT_INT
+            ):
+                optimized.append(source_line)
+                continue
+
+            source_line = (
+                f"{indent}long long {name} = "
+                f"(long long)({numeric_expr});\n"
+            )
+
+            native_ints.add(name)
+            promoted.append(
+                (name, low, high)
+            )
+
+            optimized.append(source_line)
+
+        return optimized, promoted
+
+
+    def promote_late_int_accumulators(source_lines):
+        """
+        Promotion conservative d'un accumulateur NvVal entier.
+
+        Exemple :
+
+            NvVal subtotal = nv_int(0LL);
+
+        peut devenir :
+
+            long long subtotal = 0LL;
+
+        uniquement si toutes ses réaffectations restent
+        entièrement abaissables vers un entier C natif.
+
+        Aucun type ambigu n'est promu.
+        """
+
+        declaration_re = re.compile(
+            r'^(\s*)NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*nv_int\(\s*'
+            r'(-?\d+(?:LL)?)'
+            r'\s*\)\s*;\s*$'
+        )
+
+        assignment_re = re.compile(
+            r'^\s*'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.*?)\s*;\s*$'
+        )
+
+        candidates = {}
+
+        for source_line in source_lines:
+            match = declaration_re.match(source_line)
+
+            if match:
+                candidates[match.group(2)] = (
+                    match.group(1),
+                    match.group(3),
+                )
+
+        promoted = {}
+
+        # Point fixe : une promotion peut en rendre
+        # une autre possible.
+        changed = True
+
+        while changed:
+            changed = False
+
+            for name, declaration_info in list(
+                candidates.items()
+            ):
+                if name in promoted:
+                    continue
+
+                trial_ints = set(native_ints)
+                trial_ints.update(promoted)
+                trial_ints.add(name)
+
+                valid = True
+                saw_assignment = False
+
+                name_pattern = re.compile(
+                    rf'\b{re.escape(name)}\b'
+                )
+
+                for source_line in source_lines:
+                    if not name_pattern.search(source_line):
+                        continue
+
+                    declaration_match = (
+                        declaration_re.match(source_line)
+                    )
+
+                    if (
+                        declaration_match
+                        and declaration_match.group(2) == name
+                    ):
+                        continue
+
+                    assignment_match = (
+                        assignment_re.match(source_line)
+                    )
+
+                    if assignment_match:
+                        target = assignment_match.group(1)
+                        rhs = assignment_match.group(2)
+
+                        lowered = lower_flow_number(
+                            rhs,
+                            trial_ints,
+                            native_floats,
+                            {},
+                        )
+
+                        if target == name:
+                            saw_assignment = True
+
+                            if (
+                                lowered is None
+                                or lowered[1] != "int"
+                            ):
+                                valid = False
+                                break
+
+                            continue
+
+                        # Usage de l'accumulateur dans une autre
+                        # variable : accepter uniquement si cette
+                        # cible est elle-même déjà entière native
+                        # et si tout le RHS est abaissable.
+                        if target in trial_ints:
+                            if (
+                                lowered is None
+                                or lowered[1] != "int"
+                            ):
+                                valid = False
+                                break
+
+                            continue
+
+                    # Condition numérique entièrement comprise.
+                    condition_match = re.match(
+                        r'^\s*(?:if|while)\s*'
+                        r'\((.*)\)\s*\{\s*$',
+                        source_line,
+                    )
+
+                    if condition_match:
+                        lowered_condition = (
+                            lower_flow_condition(
+                                condition_match.group(1),
+                                trial_ints,
+                                native_floats,
+                                {},
+                            )
+                        )
+
+                        if lowered_condition is not None:
+                            continue
+
+                    # Toute autre utilisation peut exiger un NvVal.
+                    valid = False
+                    break
+
+                if valid and saw_assignment:
+                    promoted[name] = declaration_info
+                    native_ints.add(name)
+                    changed = True
+
+        if not promoted:
+            return source_lines, []
+
+        optimized = []
+
+        for source_line in source_lines:
+            match = declaration_re.match(source_line)
+
+            if (
+                match
+                and match.group(2) in promoted
+            ):
+                indent = match.group(1)
+                name = match.group(2)
+                literal = match.group(3)
+
+                source_line = (
+                    f"{indent}long long {name} = "
+                    f"{literal};\n"
+                )
+
+            optimized.append(source_line)
+
+        return optimized, sorted(promoted)
+
+
+    def cleanup_all_native_int_assignments(source_lines):
+        """
+        Termine l'abaissement des variables déjà devenues
+        long long, y compris dans les while/if imbriqués.
+
+        Exemple :
+
+            subtotal =
+                nv_add(
+                    nv_add(subtotal, p),
+                    nv_mod(nv_int(value), nv_int(97LL))
+                );
+
+        devient :
+
+            subtotal =
+                (subtotal + p) + (value % 97LL);
+
+        Cette passe ne crée aucun nouveau type natif :
+        elle ne travaille que sur des variables déjà déclarées
+        long long dans le C produit.
+        """
+
+        known_ints = set(native_ints)
+        known_floats = set(native_floats)
+
+        # Repartir du C réellement produit : certaines variables
+        # peuvent avoir été rendues natives par une passe tardive.
+        for source_line in source_lines:
+            int_decl = re.match(
+                r'^\s*long long\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)\b',
+                source_line,
+            )
+
+            if int_decl:
+                known_ints.add(
+                    int_decl.group(1)
+                )
+
+            float_decl = re.match(
+                r'^\s*double\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)\b',
+                source_line,
+            )
+
+            if float_decl:
+                known_floats.add(
+                    float_decl.group(1)
+                )
+
+        optimized = []
+        rewritten = []
+
+        in_main = False
+        depth = 0
+
+        int_declaration = re.compile(
+            r'^(\s*)long long\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.*?)\s*;\s*$'
+        )
+
+        assignment = re.compile(
+            r'^(\s*)'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.*?)\s*;\s*$'
+        )
+
+        for source_line in source_lines:
+            if (
+                not in_main
+                and re.match(
+                    r'^\s*int\s+main\s*\(',
+                    source_line,
+                )
+            ):
+                in_main = True
+
+            if in_main and depth >= 1:
+                declaration_match = (
+                    int_declaration.match(source_line)
+                )
+
+                if declaration_match:
+                    indent = declaration_match.group(1)
+                    name = declaration_match.group(2)
+                    rhs = declaration_match.group(3)
+
+                    lowered = lower_flow_number(
+                        rhs,
+                        known_ints,
+                        known_floats,
+                        {},
+                    )
+
+                    if (
+                        lowered is not None
+                        and lowered[1] == "int"
+                    ):
+                        source_line = (
+                            f"{indent}long long {name} = "
+                            f"(long long)({lowered[0]});\n"
+                        )
+
+                        rewritten.append(name)
+
+                else:
+                    assignment_match = (
+                        assignment.match(source_line)
+                    )
+
+                    if assignment_match:
+                        indent = assignment_match.group(1)
+                        name = assignment_match.group(2)
+                        rhs = assignment_match.group(3)
+
+                        if name in known_ints:
+                            lowered = lower_flow_number(
+                                rhs,
+                                known_ints,
+                                known_floats,
+                                {},
+                            )
+
+                            if (
+                                lowered is not None
+                                and lowered[1] == "int"
+                            ):
+                                source_line = (
+                                    f"{indent}{name} = "
+                                    f"(long long)"
+                                    f"({lowered[0]});\n"
+                                )
+
+                                rewritten.append(name)
+
+            optimized.append(source_line)
+
+            if in_main:
+                depth += (
+                    source_line.count("{")
+                    - source_line.count("}")
+                )
+
+                if depth <= 0:
+                    in_main = False
+                    depth = 0
+
+        return optimized, rewritten
+
+
     def cleanup_native_main_assignments(source_lines):
         optimized = []
         rewritten_floats = []
@@ -2819,6 +3813,52 @@ def repair(lines):
 
     (
         numeric_output,
+        native_int_builtin_dispatches,
+    ) = simplify_native_int_builtin_dispatch(
+        numeric_output
+    )
+
+    if native_int_builtin_dispatches:
+        print(
+            "[Clariox OPT] Dispatch int(float) directs : "
+            f"{native_int_builtin_dispatches}"
+        )
+
+    (
+        numeric_output,
+        proven_native_int_casts,
+    ) = promote_proven_int_from_double(
+        numeric_output
+    )
+
+    if proven_native_int_casts:
+        print(
+            "[Clariox OPT] int(float) natifs avec "
+            "preuve de plage :"
+        )
+
+        for name, low, high in proven_native_int_casts:
+            print(
+                f"  {name}: [{low}, {high}]"
+            )
+
+    (
+        numeric_output,
+        late_native_int_accumulators,
+    ) = promote_late_int_accumulators(
+        numeric_output
+    )
+
+    if late_native_int_accumulators:
+        print(
+            "[Clariox OPT] Accumulateurs int natifs tardifs :"
+        )
+
+        for name in late_native_int_accumulators:
+            print(f"  {name} -> int")
+
+    (
+        numeric_output,
         final_native_float_assignments,
     ) = cleanup_native_main_assignments(
         numeric_output
@@ -2829,6 +3869,20 @@ def repair(lines):
             "[Clariox OPT] Réaffectations double "
             "finales simplifiées : "
             f"{len(final_native_float_assignments)}"
+        )
+
+    (
+        numeric_output,
+        final_native_int_assignments,
+    ) = cleanup_all_native_int_assignments(
+        numeric_output
+    )
+
+    if final_native_int_assignments:
+        print(
+            "[Clariox OPT] Affectations int natives "
+            "finales simplifiées : "
+            f"{len(final_native_int_assignments)}"
         )
 
     numeric_output = optimize_specialized_call_bridges(

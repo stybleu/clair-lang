@@ -7511,6 +7511,14 @@ def main():
     active_while_end = None
     active_while_types = None
 
+    # Types appris séquentiellement dans l'itération courante.
+    #
+    # Contrairement à active_while_types, ces faits ne sont
+    # JAMAIS considérés comme invariants du back-edge.
+    # Ils servent uniquement aux instructions suivantes du
+    # même chemin d'exécution.
+    loop_iteration_types = {}
+
     for line_index, line in enumerate(lines):
         if (
             not in_main
@@ -7548,6 +7556,10 @@ def main():
                 flow_types,
             )
 
+            loop_iteration_types = dict(
+                active_while_types or {}
+            )
+
         inside_active_while = (
             active_while_end is not None
             and line_index <= active_while_end
@@ -7573,6 +7585,9 @@ def main():
                 effective_types.update(
                     active_while_types or {}
                 )
+                effective_types.update(
+                    loop_iteration_types
+                )
             else:
                 effective_types.update(
                     flow_types
@@ -7588,6 +7603,114 @@ def main():
         )
 
         output.append(optimized)
+
+        # ----------------------------------------------------
+        # Types locaux à l'itération.
+        #
+        # Exemple :
+        #
+        #     NvVal item_i = nv_int(...);
+        #     NvVal value = nv_mod(...);
+        #     NvVal mixed = native_mix(value, item_i);
+        #
+        # item_i et value peuvent servir à spécialiser
+        # native_mix() dans cette même itération sans prétendre
+        # que leur type est un invariant de back-edge.
+        # ----------------------------------------------------
+
+        if in_main and inside_active_while:
+            iteration_line = optimized.strip()
+
+            iteration_declaration = re.match(
+                r'NvVal\s+'
+                r'([A-Za-z_][A-Za-z0-9_]*)'
+                r'\s*=\s*(.+);\s*$',
+                iteration_line,
+            )
+
+            if iteration_declaration:
+                iteration_name = (
+                    iteration_declaration.group(1)
+                )
+                iteration_expr = (
+                    iteration_declaration.group(2)
+                )
+
+                iteration_symbols = dict(
+                    local_types
+                )
+                iteration_symbols.update(
+                    active_while_types or {}
+                )
+                iteration_symbols.update(
+                    loop_iteration_types
+                )
+
+                iteration_type = infer_expr_type(
+                    iteration_expr,
+                    iteration_symbols,
+                )
+
+                if iteration_type in NUMERIC_TYPES:
+                    loop_iteration_types[
+                        iteration_name
+                    ] = iteration_type
+                else:
+                    loop_iteration_types.pop(
+                        iteration_name,
+                        None,
+                    )
+
+            else:
+                iteration_assignment = re.match(
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*=\s*(.+);\s*$',
+                    iteration_line,
+                )
+
+                if iteration_assignment:
+                    iteration_name = (
+                        iteration_assignment.group(1)
+                    )
+                    iteration_expr = (
+                        iteration_assignment.group(2)
+                    )
+
+                    iteration_symbols = dict(
+                        local_types
+                    )
+                    iteration_symbols.update(
+                        active_while_types or {}
+                    )
+                    iteration_symbols.update(
+                        loop_iteration_types
+                    )
+
+                    iteration_type = infer_expr_type(
+                        iteration_expr,
+                        iteration_symbols,
+                    )
+
+                    if iteration_type in NUMERIC_TYPES:
+                        loop_iteration_types[
+                            iteration_name
+                        ] = iteration_type
+                    else:
+                        loop_iteration_types.pop(
+                            iteration_name,
+                            None,
+                        )
+
+            # Sans fusion complète des branches, ne jamais
+            # transporter les faits appris sur un chemin dans
+            # un autre chemin. Les invariants prouvés restent.
+            if re.match(
+                r'(?:if\s*\(|else\s+if\s*\(|else\b)',
+                iteration_line,
+            ):
+                loop_iteration_types = dict(
+                    active_while_types or {}
+                )
 
         # ----------------------------------------------------
         # Hors boucle : mise à jour flow-sensitive normale.
@@ -7685,6 +7808,7 @@ def main():
 
                 active_while_end = None
                 active_while_types = None
+                loop_iteration_types = {}
 
             elif (
                 old_depth > 1
@@ -7702,6 +7826,7 @@ def main():
 
                 active_while_end = None
                 active_while_types = None
+                loop_iteration_types = {}
 
     # --------------------------------------------------------
     # Génération des spécialisations natives réutilisables.
