@@ -1,0 +1,20 @@
+fn mixed_return_then_if(n: int) -> float:
+    value = 1
+    i = 0
+
+    while i < n:
+        i = i + 1
+        if i == 2:
+            return value + 0.5
+        value = value + 1
+
+    if value > 5:
+        value = value + 0.25
+    else:
+        value = value + 2
+
+    return value
+
+print(mixed_return_then_if(1))
+print(mixed_return_then_if(2))
+print(mixed_return_then_if(8))

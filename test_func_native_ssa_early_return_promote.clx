@@ -1,0 +1,19 @@
+fn mixed_return_promote(n: int) -> float:
+    value = 1
+
+    if n > 0:
+        value = 2
+    else:
+        value = 3
+
+    i = 0
+
+    while i < n:
+        i = i + 1
+        if i == 1:
+            return value + 0.5
+
+    return value
+
+print(mixed_return_promote(0))
+print(mixed_return_promote(3))

@@ -1,0 +1,25 @@
+fn mixed_return_control(n: int) -> float:
+    value = 1
+
+    if n > 4:
+        value = 1.5
+    else:
+        value = 2
+
+    i = 0
+
+    while i < n:
+        i = i + 1
+        if i == 2:
+            continue
+        if i == 4:
+            return value + i
+        value = value + 1
+        if i > 6:
+            break
+
+    return value
+
+print(mixed_return_control(1))
+print(mixed_return_control(3))
+print(mixed_return_control(8))

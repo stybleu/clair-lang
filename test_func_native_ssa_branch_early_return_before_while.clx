@@ -1,0 +1,18 @@
+fn branch_return_before_while(n: int) -> float:
+    value = 1
+
+    if n < 0:
+        return 10
+    else:
+        value = 2.5
+
+    i = 0
+    while i < n:
+        value = value + 1
+        i = i + 1
+
+    return value
+
+print(branch_return_before_while(-1))
+print(branch_return_before_while(0))
+print(branch_return_before_while(3))

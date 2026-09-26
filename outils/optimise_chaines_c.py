@@ -766,8 +766,107 @@ def string_code(expr, native):
     )
 
 
+def c_brace_delta(line):
+    """Compte les accolades C en ignorant chaînes et caractères."""
+    scrubbed = re.sub(
+        r'"(?:\\.|[^"\\])*"',
+        '""',
+        line,
+    )
+    scrubbed = re.sub(
+        r"'(?:\\.|[^'\\])*'",
+        "''",
+        scrubbed,
+    )
+    scrubbed = re.sub(r'//.*$', '', scrubbed)
+    return scrubbed.count("{") - scrubbed.count("}")
+
+
+def discover_direct_nvval_return_declarations(lines):
+    """
+    Repere les declarations NvVal locales qui sont retournees
+    directement par une fonction C retournant NvVal.
+
+    Ces valeurs doivent rester boxees en NvVal. Les convertir en
+    ClarioxString ferait produire un `return` avec un type C
+    incompatible et demanderait en plus une gestion de duree de
+    vie specifique avant chaque sortie de fonction.
+    """
+    excluded = set()
+    index = 0
+
+    function_header = re.compile(
+        r'^\s*static\s+NvVal\s+'
+        r'[A-Za-z_][A-Za-z0-9_]*\s*\('
+    )
+
+    declaration = re.compile(
+        r'^\s*NvVal\s+'
+        r'([A-Za-z_][A-Za-z0-9_]*)'
+        r'\s*=.*;\s*$'
+    )
+
+    direct_return = re.compile(
+        r'^\s*return\s+'
+        r'([A-Za-z_][A-Za-z0-9_]*)'
+        r'\s*;\s*$'
+    )
+
+    while index < len(lines):
+        line = lines[index]
+
+        if not function_header.match(line):
+            index += 1
+            continue
+
+        depth = c_brace_delta(line)
+
+        # Les helpers compacts sur une seule ligne n'ont aucun
+        # local a analyser ici.
+        if depth <= 0:
+            index += 1
+            continue
+
+        start = index + 1
+        cursor = start
+
+        while cursor < len(lines) and depth > 0:
+            depth += c_brace_delta(lines[cursor])
+
+            if depth == 0:
+                break
+
+            cursor += 1
+
+        end = cursor
+        returned_names = set()
+
+        for body_index in range(start, end):
+            match = direct_return.match(lines[body_index])
+
+            if match:
+                returned_names.add(match.group(1))
+
+        if returned_names:
+            for body_index in range(start, end):
+                match = declaration.match(lines[body_index])
+
+                if (
+                    match
+                    and match.group(1) in returned_names
+                ):
+                    excluded.add(body_index)
+
+        index = max(end + 1, index + 1)
+
+    return excluded
+
+
 def discover_strings(lines):
     native = {}
+    returned_nvval_declarations = (
+        discover_direct_nvval_return_declarations(lines)
+    )
 
     changed = True
 
@@ -775,6 +874,9 @@ def discover_strings(lines):
         changed = False
 
         for index, line in enumerate(lines):
+            if index in returned_nvval_declarations:
+                continue
+
             m = re.match(
                 r'^(\s*)NvVal\s+'
                 r'([A-Za-z_][A-Za-z0-9_]*)'

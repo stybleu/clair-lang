@@ -1,0 +1,15 @@
+fn mixed_dynamic_return(n: int):
+    value = 1
+
+    if n < 0:
+        return "dynamic"
+
+    i = 0
+    while i < n:
+        value = value + 1
+        i = i + 1
+
+    return value
+
+print(mixed_dynamic_return(-1))
+print(mixed_dynamic_return(2))

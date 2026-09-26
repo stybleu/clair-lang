@@ -1293,12 +1293,18 @@ def parse_native_branch_flow_body(lines):
             ):
                 break
 
-        # Le branch-flow SSA exige encore un else final.
-        if (
-            not branches
-            or branches[-1]["condition"] is not None
-        ):
+        if not branches:
             return None
+
+        # Un if sans else possède implicitement un chemin de
+        # chute qui conserve l'état SSA d'entrée. Le représenter
+        # explicitement simplifie les joins et permet les gardes
+        # de type `if (...) return ...` suivies d'un while.
+        if branches[-1]["condition"] is not None:
+            branches.append({
+                "condition": None,
+                "operations": [],
+            })
 
         return (
             {
@@ -1363,6 +1369,65 @@ def parse_native_branch_flow_body(lines):
                     operation
                 )
 
+                continue
+
+            # Return généré par Clariox via un temporaire.
+            return_temp = re.match(
+                r'NvVal\s+'
+                r'(__ret\d+)'
+                r'\s*=\s*(.+);\s*$',
+                stripped,
+            )
+
+            if return_temp:
+                temp_name = return_temp.group(1)
+                return_expr = return_temp.group(2)
+                next_index = skip_blank(
+                    block_lines,
+                    cursor + 1,
+                )
+
+                if next_index >= len(block_lines):
+                    return None
+
+                return_line = re.match(
+                    r'return\s+'
+                    r'([A-Za-z_][A-Za-z0-9_]*)'
+                    r'\s*;\s*$',
+                    block_lines[next_index].strip(),
+                )
+
+                if (
+                    return_line is None
+                    or return_line.group(1) != temp_name
+                ):
+                    return None
+
+                result.append({
+                    "kind": "return",
+                    "expr": return_expr,
+                })
+
+                cursor = next_index + 1
+                continue
+
+            direct_return = re.match(
+                r'return\s+(.+);\s*$',
+                stripped,
+            )
+
+            if direct_return:
+                expr = direct_return.group(1)
+
+                if expr == "nv_none()":
+                    return None
+
+                result.append({
+                    "kind": "return",
+                    "expr": expr,
+                })
+
+                cursor += 1
                 continue
 
             assignment_match = re.match(
@@ -3481,6 +3546,11 @@ def build_native_branch_flow_helper(
 
     scratch_specializations = set()
 
+    # Types des retours anticipés rencontrés dans les boucles
+    # du flot mixte SSA/while. Le type final du helper est la
+    # promotion commune entre ces retours et le return terminal.
+    early_return_types = []
+
     prefix_locals = structured[
         "prefix_locals"
     ]
@@ -3683,9 +3753,19 @@ def build_native_branch_flow_helper(
                 continue
 
             if kind == "return":
-                # Les retours anticipés restent gérés par le
-                # moteur while historique pour l'instant.
-                return False
+                lowered_return = lower_expr(
+                    operation["expr"],
+                    mapping,
+                    symbols,
+                )
+
+                if lowered_return is None:
+                    return False
+
+                if lowered_return[1] not in NUMERIC_TYPES:
+                    return False
+
+                continue
 
             if kind == "assign":
                 target = operation[
@@ -3815,7 +3895,30 @@ def build_native_branch_flow_helper(
                 continue
 
             if kind == "return":
-                return None
+                lowered_return = lower_expr(
+                    operation["expr"],
+                    mapping,
+                    symbols,
+                )
+
+                if lowered_return is None:
+                    return None
+
+                return_type = lowered_return[1]
+
+                if return_type not in NUMERIC_TYPES:
+                    return None
+
+                early_return_types.append(
+                    return_type
+                )
+
+                lines.append(
+                    f"{indent}return "
+                    f"{lowered_return[0]};\n"
+                )
+
+                continue
 
             if kind == "assign":
                 target = operation[
@@ -4162,6 +4265,39 @@ def build_native_branch_flow_helper(
                 "kind"
             )
 
+            if kind == "return":
+                lowered_return = lower_expr(
+                    operation.get("expr"),
+                    current_names,
+                    symbols,
+                )
+
+                if lowered_return is None:
+                    return None
+
+                return_type = lowered_return[1]
+
+                if return_type not in NUMERIC_TYPES:
+                    return None
+
+                early_return_types.append(
+                    return_type
+                )
+
+                output_lines.append(
+                    f"{indent}return "
+                    f"{lowered_return[0]};\n"
+                )
+
+                # Le reste du bloc est inatteignable.
+                return (
+                    output_lines,
+                    current_names,
+                    current_types,
+                    symbols,
+                    False,
+                )
+
             if kind == "assign":
                 target = operation.get(
                     "target"
@@ -4240,11 +4376,21 @@ def build_native_branch_flow_helper(
                     current_names,
                     current_types,
                     symbols,
+                    if_falls_through,
                 ) = compiled_if
 
                 output_lines.extend(
                     if_lines
                 )
+
+                if not if_falls_through:
+                    return (
+                        output_lines,
+                        current_names,
+                        current_types,
+                        symbols,
+                        False,
+                    )
 
                 continue
 
@@ -4280,6 +4426,7 @@ def build_native_branch_flow_helper(
             current_names,
             current_types,
             symbols,
+            True,
         )
 
     # --------------------------------------------------------
@@ -4343,6 +4490,7 @@ def build_native_branch_flow_helper(
                 final_names,
                 final_types,
                 branch_symbols,
+                branch_falls_through,
             ) = compiled
 
             staged.append({
@@ -4351,7 +4499,14 @@ def build_native_branch_flow_helper(
                 "names": final_names,
                 "types": final_types,
                 "symbols": branch_symbols,
+                "falls_through": branch_falls_through,
             })
+
+        continuing = [
+            branch
+            for branch in staged
+            if branch["falls_through"]
+        ]
 
         joined = {}
 
@@ -4366,7 +4521,7 @@ def build_native_branch_flow_helper(
 
             touched = False
 
-            for branch in staged:
+            for branch in continuing:
                 after_name = (
                     branch["names"].get(
                         name
@@ -4392,13 +4547,13 @@ def build_native_branch_flow_helper(
                 # lowering échouera proprement.
                 if not all(
                     name in branch["names"]
-                    for branch in staged
+                    for branch in continuing
                 ):
                     continue
 
             joined_type = None
 
-            for branch in staged:
+            for branch in continuing:
                 branch_type = (
                     branch["types"].get(
                         name
@@ -4492,22 +4647,23 @@ def build_native_branch_flow_helper(
                 branch["lines"]
             )
 
-            for name, join in joined.items():
-                final_name = (
-                    branch["names"].get(
-                        name
+            if branch["falls_through"]:
+                for name, join in joined.items():
+                    final_name = (
+                        branch["names"].get(
+                            name
+                        )
                     )
-                )
 
-                if final_name is None:
-                    return None
+                    if final_name is None:
+                        return None
 
-                result_lines.append(
-                    f"{indent}    "
-                    f"{join['name']} = "
-                    f"({join['c_type']})"
-                    f"({final_name});\n"
-                )
+                    result_lines.append(
+                        f"{indent}    "
+                        f"{join['name']} = "
+                        f"({join['c_type']})"
+                        f"({final_name});\n"
+                    )
 
             result_lines.append(
                 f"{indent}}}\n"
@@ -4543,6 +4699,7 @@ def build_native_branch_flow_helper(
             output_names,
             output_types,
             output_symbols,
+            bool(continuing),
         )
 
     # --------------------------------------------------------
@@ -4619,7 +4776,14 @@ def build_native_branch_flow_helper(
         current_names,
         current_types,
         symbols,
+        falls_through,
     ) = compiled
+
+    if not falls_through:
+        # Le parseur branch-flow exige encore un return final ;
+        # une fonction dont tous les chemins terminent avant ce
+        # point est laissée au chemin historique.
+        return None
 
     body_lines.extend(
         operation_lines
@@ -4651,10 +4815,21 @@ def build_native_branch_flow_helper(
     if lowered_return[1] not in NUMERIC_TYPES:
         return None
 
+    result_type = lowered_return[1]
+
+    for early_type in early_return_types:
+        result_type = promote(
+            result_type,
+            early_type,
+        )
+
+        if result_type not in NUMERIC_TYPES:
+            return None
+
     return {
         "lines": body_lines,
         "return_expr": lowered_return[0],
-        "return_type": lowered_return[1],
+        "return_type": result_type,
         "terminal_returns": False,
     }
 

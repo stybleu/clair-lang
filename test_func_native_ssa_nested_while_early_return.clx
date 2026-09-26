@@ -1,0 +1,25 @@
+fn mixed_nested_return(n: int) -> float:
+    value = 1
+
+    if n > 3:
+        value = 1.5
+    else:
+        value = 2
+
+    i = 0
+    j = 0
+
+    while i < n:
+        i = i + 1
+        j = 0
+        while j < 3:
+            j = j + 1
+            if i == 2:
+                if j == 2:
+                    return value + i + j
+        value = value + 1
+
+    return value
+
+print(mixed_nested_return(1))
+print(mixed_nested_return(5))
