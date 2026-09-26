@@ -1,0 +1,13 @@
+fn first(x):
+    return x + 1.0
+
+fn second(x):
+    return first(x) * 2.0
+
+fn third(x):
+    return second(x) + 3.0
+
+a = 1.0
+b = third(a)
+
+print(b)

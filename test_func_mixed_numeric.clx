@@ -1,0 +1,7 @@
+fn calculate(a: int, b: float) -> float:
+    c = a * b
+    return c + 1.0
+
+result = calculate(4, 2.5)
+
+print(result)

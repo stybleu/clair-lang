@@ -1,0 +1,12 @@
+fn branch_math(x: float) -> float:
+    if x >= 0.0:
+        y = x * 2.0
+        z = y + y + 1.0
+        return z
+    else:
+        y = x * 3.0
+        z = y + y - 1.0
+        return z
+
+print(branch_math(2.0))
+print(branch_math(-2.0))

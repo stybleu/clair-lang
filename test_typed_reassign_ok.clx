@@ -1,0 +1,4 @@
+age: int = 26
+age = 27
+age = age + 1
+print(age)

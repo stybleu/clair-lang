@@ -1,0 +1,3 @@
+value = 26
+value = "Alice"
+print(value)

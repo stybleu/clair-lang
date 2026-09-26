@@ -1,0 +1,7 @@
+fn only_int(x: int) -> int:
+    return x + 1
+
+a = 1
+a = 2.5
+
+print(only_int(a))

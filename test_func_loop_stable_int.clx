@@ -1,0 +1,11 @@
+fn only_int(x: int) -> int:
+    return x + 1
+
+a = 1
+i = 0
+
+while i < 3:
+    a = only_int(a)
+    i = i + 1
+
+print(a)

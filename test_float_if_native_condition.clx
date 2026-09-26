@@ -1,0 +1,8 @@
+a = 1.5
+b = 2.0
+limit = 6.0
+
+if a * 2.0 + b < limit:
+    print("if-ok")
+else:
+    print("bad")

@@ -1,0 +1,9 @@
+fn inc(x):
+    return x + 1
+
+a = 1
+b = inc(a)
+c = inc(b)
+d = inc(c)
+
+print(d)

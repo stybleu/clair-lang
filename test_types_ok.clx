@@ -1,0 +1,9 @@
+age: int = 26
+price: float = 12.5
+name: str = "Alice"
+active: bool = true
+
+print(age)
+print(price)
+print(name)
+print(active)

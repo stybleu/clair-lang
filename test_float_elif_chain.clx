@@ -1,0 +1,10 @@
+a = 3.5
+
+if a < 1.0:
+    print("bad-1")
+elif a < 2.0:
+    print("bad-2")
+elif a < 4.0:
+    print("chain-ok")
+else:
+    print("bad-3")

@@ -1,0 +1,10 @@
+fn only_int(x: int) -> int:
+    return x + 1
+
+a = 1
+i = 0
+
+while i < 2:
+    print(only_int(a))
+    a = 2.5
+    i = i + 1

@@ -1,0 +1,8 @@
+a = 2.5
+
+if a < 1.0:
+    print("bad")
+elif a < 3.0 and input_int() > 0:
+    print("yes")
+else:
+    print("no")

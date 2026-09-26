@@ -1,0 +1,11 @@
+fn adjust(x: float) -> float:
+    if x >= 0.0:
+        return x + 1.0
+    else:
+        return x - 1.0
+
+a = adjust(5.0)
+b = adjust(-5.0)
+
+print(a)
+print(b)

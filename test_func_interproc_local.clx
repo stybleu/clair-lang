@@ -1,0 +1,12 @@
+fn multiply(x):
+    return x * 2.0
+
+fn calculate(x):
+    y = multiply(x)
+    z = y + 3.0
+    return z
+
+a = 4.0
+b = calculate(a)
+
+print(b)

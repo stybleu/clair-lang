@@ -1,0 +1,3 @@
+age: int = 26
+age = "Alice"
+print(age)

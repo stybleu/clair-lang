@@ -1,0 +1,9 @@
+fn calc(x):
+    return x / 2 + 0.5
+
+a = 10
+b = calc(a)
+c = calc(b)
+d = calc(c)
+
+print(d)

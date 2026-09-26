@@ -1,0 +1,9 @@
+fn only_int(x: int) -> int:
+    return x + 1
+
+fn wrapper(x):
+    return only_int(x) * 2
+
+a = 2.5
+
+print(wrapper(a))

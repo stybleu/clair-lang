@@ -1,0 +1,5 @@
+fn change(value: int) -> int:
+    value = "Alice"
+    return value
+
+print(change(10))

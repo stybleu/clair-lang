@@ -1,0 +1,14 @@
+fn add_one(x):
+    return x + 1
+
+fn wrapper(x):
+    return add_one(x) * 2
+
+a = 10
+b = 1.5
+
+ri = wrapper(a)
+rf = wrapper(b)
+
+print(ri)
+print(rf)

@@ -1,0 +1,13 @@
+a = 0.0
+b = 10.0
+
+while a < 5.0 and b > 5.0:
+    a = a + 1.0
+    b = b - 1.0
+
+result = a + b
+
+a = "done"
+b = "done"
+
+print(result)

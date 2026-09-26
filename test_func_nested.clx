@@ -1,0 +1,7 @@
+fn step(x):
+    return x + 1.0
+
+a = 1.0
+b = step(step(step(a)))
+
+print(b)

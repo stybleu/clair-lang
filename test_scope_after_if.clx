@@ -1,0 +1,10 @@
+fn choose(x: float) -> float:
+    if x >= 0.0:
+        result = x + 1.0
+    else:
+        result = x - 1.0
+
+    return result
+
+print(choose(5.0))
+print(choose(-5.0))

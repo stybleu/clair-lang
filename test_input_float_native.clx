@@ -1,0 +1,5 @@
+a: float = input_float("A: ")
+b = a * 2.0 + 1.0
+
+print(a)
+print(b)

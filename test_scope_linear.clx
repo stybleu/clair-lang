@@ -1,0 +1,6 @@
+fn linear(x: float) -> float:
+    y = x * 2.0
+    z = y + 3.0
+    return z
+
+print(linear(4.0))
