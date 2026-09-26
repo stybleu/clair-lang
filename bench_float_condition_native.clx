@@ -1,0 +1,10 @@
+a = 0.0
+
+while a < 20000000.0:
+    a = a + 1.0
+
+result = a
+
+a = "done"
+
+print(result)

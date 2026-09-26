@@ -1,0 +1,9 @@
+total = 0
+
+for i in range(500000):
+    if i % 2 == 0:
+        continue
+
+    total = total + i
+
+print(total)

@@ -1,0 +1,9 @@
+a = 1.5
+b = a + 2.5
+c = b * 3.5
+d = c / 2
+e = d + b
+
+a = "done"
+
+print(e)

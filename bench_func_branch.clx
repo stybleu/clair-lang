@@ -1,0 +1,14 @@
+fn adjust(x: float) -> float:
+    if x >= 0.0:
+        return x + 1.0
+    else:
+        return x - 1.0
+
+a = 0.0
+i = 0
+
+while i < 1000000:
+    a = adjust(a)
+    i = i + 1
+
+print(a)

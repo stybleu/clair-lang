@@ -1,0 +1,12 @@
+i = 0
+a = 1.23456789
+
+while i < 20000000:
+    a = a * 1.0000001 + 0.000001
+    i = i + 1
+
+result = a
+
+a = "done"
+
+print(result)

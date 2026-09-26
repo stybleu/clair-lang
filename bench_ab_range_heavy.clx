@@ -1,0 +1,9 @@
+total = 0
+
+for i in range(1000000):
+    if i % 3 == 0:
+        continue
+
+    total = total + (i % 97)
+
+print(total)

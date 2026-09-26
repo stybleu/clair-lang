@@ -1,0 +1,12 @@
+fn step(x: float) -> float:
+    y = x + 1.0
+    return y
+
+a = 0.0
+i = 0
+
+while i < 1000000:
+    a = step(a)
+    i = i + 1
+
+print(a)
