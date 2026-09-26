@@ -1116,21 +1116,14 @@ def parse_conditional_native_body(lines):
 
 def parse_native_branch_flow_body(lines):
     """
-    Analyse un flot numérique de fonction contenant des
-    if / elif / else potentiellement imbriqués.
+    Analyse un flot numérique structuré comprenant désormais :
 
-    La représentation produite est récursive :
+        assign
+        if / elif / else
+        while
 
-        operation if
-            branches
-                operations
-                    assign
-                    if
-                    ...
-
-    Les variables hoisted ne deviennent valides qu'après
-    une preuve que tous les chemins nécessaires les définissent.
-    Cette preuve est effectuée par le builder SSA.
+    Les corps de while utilisent la représentation récursive
+    déjà produite par parse_native_loop_assignments().
     """
 
     index = 0
@@ -1141,7 +1134,7 @@ def parse_native_branch_flow_body(lines):
 
     operations = []
     return_expr = None
-    saw_branch = False
+    saw_control = False
 
     def skip_blank(seq, i):
         while (
@@ -1152,9 +1145,48 @@ def parse_native_branch_flow_body(lines):
 
         return i
 
-    # --------------------------------------------------------
-    # Parse récursif d'une chaîne if / elif / else.
-    # --------------------------------------------------------
+    def parse_while(seq, start):
+        stripped = seq[start].strip()
+
+        match = re.match(
+            r'^while\s*\((.*)\)\s*\{\s*$',
+            stripped,
+        )
+
+        if match is None:
+            return None
+
+        collected = collect_braced_block(
+            seq,
+            start,
+        )
+
+        if collected is None:
+            return None
+
+        loop_lines, close_index = collected
+
+        nested_operations = (
+            parse_native_loop_assignments(
+                loop_lines,
+                known_names,
+            )
+        )
+
+        if nested_operations is None:
+            return None
+
+        return (
+            {
+                "kind": "while",
+                "condition": match.group(1),
+                "operations": nested_operations,
+            },
+            skip_blank(
+                seq,
+                close_index + 1,
+            ),
+        )
 
     def parse_if_chain(seq, start):
         cursor = skip_blank(
@@ -1261,8 +1293,7 @@ def parse_native_branch_flow_body(lines):
             ):
                 break
 
-        # Version conservatrice :
-        # tout if spécialisé doit posséder un else final.
+        # Le branch-flow SSA exige encore un else final.
         if (
             not branches
             or branches[-1]["condition"] is not None
@@ -1276,10 +1307,6 @@ def parse_native_branch_flow_body(lines):
             },
             cursor,
         )
-
-    # --------------------------------------------------------
-    # Opérations autorisées à l'intérieur d'une branche.
-    # --------------------------------------------------------
 
     def parse_operations(block_lines):
         result = []
@@ -1298,13 +1325,31 @@ def parse_native_branch_flow_body(lines):
                 block_lines[cursor].strip()
             )
 
-            if_match = re.match(
-                r'^if\s*\((.*)\)\s*\{\s*$',
+            if re.match(
+                r'^if\s*\(',
                 stripped,
-            )
-
-            if if_match:
+            ):
                 parsed = parse_if_chain(
+                    block_lines,
+                    cursor,
+                )
+
+                if parsed is None:
+                    return None
+
+                operation, cursor = parsed
+
+                result.append(
+                    operation
+                )
+
+                continue
+
+            if re.match(
+                r'^while\s*\(',
+                stripped,
+            ):
+                parsed = parse_while(
                     block_lines,
                     cursor,
                 )
@@ -1347,8 +1392,6 @@ def parse_native_branch_flow_body(lines):
                 cursor += 1
                 continue
 
-            # Return anticipé et autres contrôles restent
-            # volontairement hors de ce chemin pour l'instant.
             return None
 
         return result
@@ -1359,7 +1402,7 @@ def parse_native_branch_flow_body(lines):
     )
 
     # --------------------------------------------------------
-    # Prologue.
+    # Prologue : variables initialisées / hoisted.
     # --------------------------------------------------------
 
     while index < len(lines):
@@ -1432,12 +1475,10 @@ def parse_native_branch_flow_body(lines):
 
             return None
 
-        if_match = re.match(
-            r'^if\s*\((.*)\)\s*\{\s*$',
+        if re.match(
+            r'^if\s*\(',
             stripped,
-        )
-
-        if if_match:
+        ):
             parsed = parse_if_chain(
                 lines,
                 index,
@@ -1452,10 +1493,30 @@ def parse_native_branch_flow_body(lines):
                 operation
             )
 
-            saw_branch = True
+            saw_control = True
             continue
 
-        # Réaffectation séquentielle après un join.
+        if re.match(
+            r'^while\s*\(',
+            stripped,
+        ):
+            parsed = parse_while(
+                lines,
+                index,
+            )
+
+            if parsed is None:
+                return None
+
+            operation, index = parsed
+
+            operations.append(
+                operation
+            )
+
+            saw_control = True
+            continue
+
         assignment_match = re.match(
             r'([A-Za-z_][A-Za-z0-9_]*)'
             r'\s*=\s*(.+);\s*$',
@@ -1479,8 +1540,6 @@ def parse_native_branch_flow_body(lines):
             index += 1
             continue
 
-        # NvVal __retN = expression;
-        # return __retN;
         return_temp = re.match(
             r'NvVal\s+'
             r'(__ret\d+)'
@@ -1525,6 +1584,43 @@ def parse_native_branch_flow_body(lines):
             index = next_index + 1
             continue
 
+        # Déclaration numérique rencontrée après un premier
+        # bloc de contrôle. Elle doit rester à cet endroit
+        # sémantiquement, mais peut devenir une première
+        # définition SSA.
+        late_local = re.match(
+            r'NvVal\s+'
+            r'([A-Za-z_][A-Za-z0-9_]*)'
+            r'\s*=\s*(.+);\s*$',
+            stripped,
+        )
+
+        if late_local:
+            name = late_local.group(1)
+            expr = late_local.group(2).strip()
+
+            if (
+                re.fullmatch(r'__ret\d+', name)
+                or name in known_names
+                or expr == "nv_none()"
+            ):
+                return None
+
+            # Réserver un slot stable pour le générateur SSA,
+            # sans initialiser la variable avant son point
+            # réel de déclaration.
+            known_names.add(name)
+            hoisted_names.append(name)
+
+            operations.append({
+                "kind": "assign",
+                "target": name,
+                "expr": expr,
+            })
+
+            index += 1
+            continue
+
         direct_return = re.match(
             r'return\s+(.+);\s*$',
             stripped,
@@ -1544,7 +1640,7 @@ def parse_native_branch_flow_body(lines):
         return None
 
     if (
-        not saw_branch
+        not saw_control
         or return_expr is None
     ):
         return None
@@ -1557,6 +1653,7 @@ def parse_native_branch_flow_body(lines):
         "operations": operations,
         "return": return_expr,
     }
+
 
 
 
@@ -3358,12 +3455,17 @@ def build_native_branch_flow_helper(
     helper_name,
 ):
     """
-    Génère un SSA simplifié récursif pour les points de
-    jonction if / elif / else.
+    Génère un flot SSA récursif avec raccord conservateur
+    vers des boucles while natives.
 
-    Chaque branche possède son environnement de versions.
-    Les environnements sont fusionnés à chaque join avant
-    de poursuivre l'analyse.
+    Hors boucle :
+        valeurs versionnées SSA.
+
+    Dans une boucle :
+        variables mutées matérialisées en stockage C mutable.
+
+    Après la boucle :
+        le stockage mutable devient la valeur courante du flot.
     """
 
     structured = info.get(
@@ -3409,6 +3511,7 @@ def build_native_branch_flow_helper(
     }
 
     temp_counter = [0]
+    loop_counter = [0]
 
     def make_version_name(
         source_name,
@@ -3428,6 +3531,17 @@ def build_native_branch_flow_helper(
 
         return (
             f"__{helper_name}_ssa_tmp_"
+            f"{value}_{target}"
+        )
+
+    def make_loop_name(
+        target,
+    ):
+        value = loop_counter[0]
+        loop_counter[0] += 1
+
+        return (
+            f"__{helper_name}_loop_"
             f"{value}_{target}"
         )
 
@@ -3501,6 +3615,524 @@ def build_native_branch_flow_helper(
         )
 
     # --------------------------------------------------------
+    # Variables réellement modifiées dans une boucle.
+    # --------------------------------------------------------
+
+    def collect_assigned_names(
+        operations,
+        result=None,
+    ):
+        if result is None:
+            result = set()
+
+        for operation in operations:
+            kind = operation.get(
+                "kind"
+            )
+
+            if kind == "assign":
+                result.add(
+                    operation["target"]
+                )
+                continue
+
+            if kind == "if":
+                for branch in operation[
+                    "branches"
+                ]:
+                    collect_assigned_names(
+                        branch["operations"],
+                        result,
+                    )
+
+                continue
+
+            if kind == "while":
+                collect_assigned_names(
+                    operation["operations"],
+                    result,
+                )
+
+        return result
+
+    # --------------------------------------------------------
+    # Validation d'un corps de boucle avec types de stockage
+    # fixes.
+    #
+    # Une boucle mixte SSA ne peut pas encore élargir son
+    # stockage sur une back-edge : float -> int est permis
+    # par conversion vers float, mais int -> float exige déjà
+    # un stockage float à l'entrée de la boucle.
+    # --------------------------------------------------------
+
+    def validate_loop_operations(
+        operations,
+        mapping,
+        types,
+        symbols,
+    ):
+        for operation in operations:
+            kind = operation.get(
+                "kind"
+            )
+
+            if kind in {
+                "break",
+                "continue",
+            }:
+                continue
+
+            if kind == "return":
+                # Les retours anticipés restent gérés par le
+                # moteur while historique pour l'instant.
+                return False
+
+            if kind == "assign":
+                target = operation[
+                    "target"
+                ]
+
+                if (
+                    target not in mapping
+                    or target not in types
+                ):
+                    return False
+
+                lowered = lower_expr(
+                    operation["expr"],
+                    mapping,
+                    symbols,
+                )
+
+                if lowered is None:
+                    return False
+
+                expr_type = lowered[1]
+                target_type = types[
+                    target
+                ]
+
+                if (
+                    expr_type not in NUMERIC_TYPES
+                    or target_type not in NUMERIC_TYPES
+                ):
+                    return False
+
+                # Le stockage de boucle doit déjà être assez
+                # large pour toutes les valeurs produites.
+                if promote(
+                    target_type,
+                    expr_type,
+                ) != target_type:
+                    return False
+
+                continue
+
+            if kind == "if":
+                for branch in operation[
+                    "branches"
+                ]:
+                    condition = branch[
+                        "condition"
+                    ]
+
+                    if condition is not None:
+                        lowered_condition = (
+                            lower_condition(
+                                condition,
+                                mapping,
+                                symbols,
+                            )
+                        )
+
+                        if lowered_condition is None:
+                            return False
+
+                    if not validate_loop_operations(
+                        branch["operations"],
+                        mapping,
+                        types,
+                        symbols,
+                    ):
+                        return False
+
+                continue
+
+            if kind == "while":
+                lowered_condition = (
+                    lower_condition(
+                        operation["condition"],
+                        mapping,
+                        symbols,
+                    )
+                )
+
+                if lowered_condition is None:
+                    return False
+
+                if not validate_loop_operations(
+                    operation["operations"],
+                    mapping,
+                    types,
+                    symbols,
+                ):
+                    return False
+
+                continue
+
+            return False
+
+        return True
+
+    # --------------------------------------------------------
+    # Emission récursive du corps mutable d'une boucle.
+    # --------------------------------------------------------
+
+    def emit_loop_operations(
+        operations,
+        mapping,
+        types,
+        symbols,
+        indent,
+    ):
+        lines = []
+
+        for operation in operations:
+            kind = operation.get(
+                "kind"
+            )
+
+            if kind == "break":
+                lines.append(
+                    f"{indent}break;\n"
+                )
+                continue
+
+            if kind == "continue":
+                lines.append(
+                    f"{indent}continue;\n"
+                )
+                continue
+
+            if kind == "return":
+                return None
+
+            if kind == "assign":
+                target = operation[
+                    "target"
+                ]
+
+                lowered = lower_expr(
+                    operation["expr"],
+                    mapping,
+                    symbols,
+                )
+
+                if lowered is None:
+                    return None
+
+                target_type = types[
+                    target
+                ]
+
+                c_type = numeric_c_type(
+                    target_type
+                )
+
+                if c_type is None:
+                    return None
+
+                lines.append(
+                    f"{indent}"
+                    f"{mapping[target]} = "
+                    f"({c_type})"
+                    f"({lowered[0]});\n"
+                )
+
+                continue
+
+            if kind == "if":
+                branches = operation[
+                    "branches"
+                ]
+
+                for branch_index, branch in enumerate(
+                    branches
+                ):
+                    condition = branch[
+                        "condition"
+                    ]
+
+                    if condition is None:
+                        if branch_index == 0:
+                            return None
+
+                        lines.append(
+                            f"{indent}else {{\n"
+                        )
+
+                    else:
+                        lowered_condition = (
+                            lower_condition(
+                                condition,
+                                mapping,
+                                symbols,
+                            )
+                        )
+
+                        if lowered_condition is None:
+                            return None
+
+                        keyword = (
+                            "if"
+                            if branch_index == 0
+                            else "else if"
+                        )
+
+                        lines.append(
+                            f"{indent}{keyword} "
+                            f"({lowered_condition}) {{\n"
+                        )
+
+                    nested = emit_loop_operations(
+                        branch["operations"],
+                        mapping,
+                        types,
+                        symbols,
+                        indent + "    ",
+                    )
+
+                    if nested is None:
+                        return None
+
+                    lines.extend(
+                        nested
+                    )
+
+                    lines.append(
+                        f"{indent}}}\n"
+                    )
+
+                continue
+
+            if kind == "while":
+                lowered_condition = (
+                    lower_condition(
+                        operation["condition"],
+                        mapping,
+                        symbols,
+                    )
+                )
+
+                if lowered_condition is None:
+                    return None
+
+                lines.append(
+                    f"{indent}while "
+                    f"({lowered_condition}) {{\n"
+                )
+
+                nested = emit_loop_operations(
+                    operation["operations"],
+                    mapping,
+                    types,
+                    symbols,
+                    indent + "    ",
+                )
+
+                if nested is None:
+                    return None
+
+                lines.extend(
+                    nested
+                )
+
+                lines.append(
+                    f"{indent}}}\n"
+                )
+
+                continue
+
+            return None
+
+        return lines
+
+    # --------------------------------------------------------
+    # Compile un while à partir de l'état SSA courant.
+    # --------------------------------------------------------
+
+    def compile_while(
+        operation,
+        pre_names,
+        pre_types,
+        pre_symbols,
+        indent,
+    ):
+        assigned_names = (
+            collect_assigned_names(
+                operation["operations"]
+            )
+        )
+
+        loop_names = dict(
+            pre_names
+        )
+
+        loop_types = dict(
+            pre_types
+        )
+
+        loop_symbols = dict(
+            pre_symbols
+        )
+
+        prefix_lines = []
+
+        # Toutes les variables mutées doivent déjà avoir une
+        # valeur avant la boucle. Cela garantit correctement
+        # le cas zéro itération.
+        ordered_names = sorted(
+            assigned_names,
+            key=lambda name: (
+                local_slots.get(
+                    name,
+                    10 ** 9,
+                ),
+                name,
+            ),
+        )
+
+        for name in ordered_names:
+            if (
+                name not in pre_names
+                or name not in pre_types
+            ):
+                return None
+
+            typ = pre_types[
+                name
+            ]
+
+            if typ not in NUMERIC_TYPES:
+                return None
+
+            c_type = numeric_c_type(
+                typ
+            )
+
+            if c_type is None:
+                return None
+
+            mutable_name = make_loop_name(
+                name
+            )
+
+            prefix_lines.append(
+                f"{indent}{c_type} "
+                f"{mutable_name} = "
+                f"({c_type})"
+                f"({pre_names[name]});\n"
+            )
+
+            loop_names[
+                name
+            ] = mutable_name
+
+            loop_types[
+                name
+            ] = typ
+
+            loop_symbols[
+                mutable_name
+            ] = typ
+
+        lowered_condition = lower_condition(
+            operation["condition"],
+            loop_names,
+            loop_symbols,
+        )
+
+        if lowered_condition is None:
+            return None
+
+        if not validate_loop_operations(
+            operation["operations"],
+            loop_names,
+            loop_types,
+            loop_symbols,
+        ):
+            return None
+
+        loop_lines = list(
+            prefix_lines
+        )
+
+        loop_lines.append(
+            f"{indent}while "
+            f"({lowered_condition}) {{\n"
+        )
+
+        emitted = emit_loop_operations(
+            operation["operations"],
+            loop_names,
+            loop_types,
+            loop_symbols,
+            indent + "    ",
+        )
+
+        if emitted is None:
+            return None
+
+        loop_lines.extend(
+            emitted
+        )
+
+        loop_lines.append(
+            f"{indent}}}\n"
+        )
+
+        output_names = dict(
+            pre_names
+        )
+
+        output_types = dict(
+            pre_types
+        )
+
+        output_symbols = dict(
+            pre_symbols
+        )
+
+        # Les stockages mutables deviennent les valeurs
+        # visibles après la boucle. En cas de zéro itération,
+        # ils contiennent simplement la valeur d'entrée.
+        for name in assigned_names:
+            output_names[
+                name
+            ] = loop_names[
+                name
+            ]
+
+            output_types[
+                name
+            ] = loop_types[
+                name
+            ]
+
+            output_symbols[
+                loop_names[name]
+            ] = loop_types[
+                name
+            ]
+
+        return (
+            loop_lines,
+            output_names,
+            output_types,
+            output_symbols,
+        )
+
+    # --------------------------------------------------------
     # Compilation récursive d'une liste d'opérations.
     # --------------------------------------------------------
 
@@ -3525,16 +4157,10 @@ def build_native_branch_flow_helper(
 
         output_lines = []
 
-        for operation_index, operation in enumerate(
-            operations
-        ):
+        for operation in operations:
             kind = operation.get(
                 "kind"
             )
-
-            # ------------------------------------------------
-            # Affectation SSA.
-            # ------------------------------------------------
 
             if kind == "assign":
                 target = operation.get(
@@ -3597,10 +4223,6 @@ def build_native_branch_flow_helper(
 
                 continue
 
-            # ------------------------------------------------
-            # Join récursif.
-            # ------------------------------------------------
-
             if kind == "if":
                 compiled_if = compile_if(
                     operation,
@@ -3622,6 +4244,31 @@ def build_native_branch_flow_helper(
 
                 output_lines.extend(
                     if_lines
+                )
+
+                continue
+
+            if kind == "while":
+                compiled_while = compile_while(
+                    operation,
+                    current_names,
+                    current_types,
+                    symbols,
+                    indent,
+                )
+
+                if compiled_while is None:
+                    return None
+
+                (
+                    while_lines,
+                    current_names,
+                    current_types,
+                    symbols,
+                ) = compiled_while
+
+                output_lines.extend(
+                    while_lines
                 )
 
                 continue
@@ -3660,10 +4307,7 @@ def build_native_branch_flow_helper(
 
         staged = []
 
-        # Chaque branche part exactement du même état SSA.
-        for branch_index, branch in enumerate(
-            branches
-        ):
+        for branch in branches:
             raw_condition = branch.get(
                 "condition"
             )
@@ -3709,10 +4353,6 @@ def build_native_branch_flow_helper(
                 "symbols": branch_symbols,
             })
 
-        # ----------------------------------------------------
-        # Identifier les valeurs réellement modifiées.
-        # ----------------------------------------------------
-
         joined = {}
 
         for name in known_names:
@@ -3737,22 +4377,24 @@ def build_native_branch_flow_helper(
                     if after_name != before_name:
                         touched = True
                         break
-                else:
-                    if after_name is not None:
-                        touched = True
-                        break
+
+                elif after_name is not None:
+                    touched = True
+                    break
 
             if not touched:
                 continue
 
-            # Une valeur inexistante avant le if doit être
-            # définie sur absolument tous les chemins.
             if not existed_before:
+                # Variable locale à une branche seulement :
+                # elle n'est simplement pas visible après le
+                # join. Si elle est utilisée plus tard, le
+                # lowering échouera proprement.
                 if not all(
                     name in branch["names"]
                     for branch in staged
                 ):
-                    return None
+                    continue
 
             joined_type = None
 
@@ -3810,10 +4452,6 @@ def build_native_branch_flow_helper(
                 "c_type": c_type,
             }
 
-        # ----------------------------------------------------
-        # Déclarations phi simplifiées avant le if.
-        # ----------------------------------------------------
-
         result_lines = []
 
         for name, join in joined.items():
@@ -3822,10 +4460,6 @@ def build_native_branch_flow_helper(
                 f"{join['c_type']} "
                 f"{join['name']};\n"
             )
-
-        # ----------------------------------------------------
-        # Émission des branches.
-        # ----------------------------------------------------
 
         for branch_index, branch in enumerate(
             staged
@@ -3858,8 +4492,6 @@ def build_native_branch_flow_helper(
                 branch["lines"]
             )
 
-            # Chaque sortie de branche alimente la version
-            # commune du join.
             for name, join in joined.items():
                 final_name = (
                     branch["names"].get(
@@ -3880,10 +4512,6 @@ def build_native_branch_flow_helper(
             result_lines.append(
                 f"{indent}}}\n"
             )
-
-        # ----------------------------------------------------
-        # Environnement SSA après le join.
-        # ----------------------------------------------------
 
         output_names = dict(
             pre_names
@@ -3918,7 +4546,7 @@ def build_native_branch_flow_helper(
         )
 
     # --------------------------------------------------------
-    # Prologue natif v0.
+    # Prologue natif.
     # --------------------------------------------------------
 
     current_names = {}
@@ -3975,10 +4603,6 @@ def build_native_branch_flow_helper(
             safe_name
         ] = typ
 
-    # --------------------------------------------------------
-    # Corps récursif.
-    # --------------------------------------------------------
-
     compiled = compile_operations(
         structured["operations"],
         current_names,
@@ -4000,10 +4624,6 @@ def build_native_branch_flow_helper(
     body_lines.extend(
         operation_lines
     )
-
-    # --------------------------------------------------------
-    # Return final.
-    # --------------------------------------------------------
 
     return_source = rewrite_source(
         structured["return"],
@@ -4037,6 +4657,7 @@ def build_native_branch_flow_helper(
         "return_type": lowered_return[1],
         "terminal_returns": False,
     }
+
 
 
 
