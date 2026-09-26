@@ -2717,6 +2717,21 @@ def lower_numeric_condition_c(
     inner = unwrap(expr, "nv_truth")
 
     if inner is not None:
+        # Une condition logique peut elle-même être enveloppée
+        # dans nv_truth(), par exemple :
+        #
+        #     nv_truth(nv_and(...))
+        #     nv_truth(nv_or(...))
+        #
+        # Essayer d'abord le lowering conditionnel récursif.
+        nested_condition = lower_numeric_condition_c(
+            inner,
+            symbols,
+        )
+
+        if nested_condition is not None:
+            return nested_condition
+
         lowered = lower_numeric_expr_c(
             inner,
             symbols,
@@ -3584,10 +3599,15 @@ def build_native_branch_flow_helper(
     loop_counter = [0]
 
     # Identifiants C contenant un entier dont la conversion vers
-    # double est prouvée exacte. Cette provenance protège les
-    # promotions de back-edge contre la perte de précision avant
-    # la première itération (notamment lorsque le while exécute
-    # zéro fois).
+    # double est sûre avant la première itération.
+    #
+    # Le runtime distingue encore NV_INT et NV_FLOAT lors de la
+    # conversion texte (%lld contre %g). Avec la précision %g par
+    # défaut, tous les entiers de [-999999, 999999] conservent la
+    # même représentation textuelle après conversion. Au-delà,
+    # rester dynamique tant que Clariox ne normalise pas
+    # officiellement les retours numériques.
+    SAFE_PROMOTED_INT = 999999
     float_exact_int_names = set()
 
     def source_is_float_exact_int(
@@ -3618,7 +3638,7 @@ def build_native_branch_flow_helper(
                 literal_match.group(1)
             )
 
-            return abs(value) <= (1 << 53)
+            return abs(value) <= SAFE_PROMOTED_INT
 
         name_match = re.fullmatch(
             r'[A-Za-z_][A-Za-z0-9_]*',
@@ -3667,6 +3687,355 @@ def build_native_branch_flow_helper(
             )
 
         return False
+
+    # Même limite conservative que source_is_float_exact_int().
+    # Une garde de plage doit préserver la valeur et le rendu
+    # observable d'un entier si le while exécute zéro fois.
+    SAFE_DOUBLE_INT = SAFE_PROMOTED_INT
+
+    def parse_guard_int_literal(expr):
+        expr = strip_outer_parens(
+            expr.strip()
+        )
+
+        inner = unwrap(
+            expr,
+            "nv_int",
+        )
+
+        if inner is not None:
+            return parse_guard_int_literal(
+                inner
+            )
+
+        inner = unwrap(
+            expr,
+            "nv_neg",
+        )
+
+        if inner is not None:
+            value = parse_guard_int_literal(
+                inner
+            )
+
+            if value is None:
+                return None
+
+            return -value
+
+        match = re.fullmatch(
+            r'(-?\d+)(?:LL)?',
+            expr,
+        )
+
+        if match is None:
+            return None
+
+        return int(match.group(1))
+
+    def condition_int_ranges(
+        expr,
+        mapping,
+        symbols,
+        truth=True,
+    ):
+        """
+        Extrait des bornes entières garanties par une condition.
+
+        La première version est volontairement conservative :
+        - A and B vrai  -> intersection des bornes ;
+        - A or B faux   -> intersection de not A et not B ;
+        - not inverse la vérité attendue ;
+        - comparaisons variable/constante entière seulement.
+
+        Les formes disjonctives qui ne garantissent pas une plage
+        unique sont ignorées plutôt que devinées.
+        """
+
+        expr = strip_outer_parens(
+            expr.strip()
+        )
+
+        inner = unwrap(
+            expr,
+            "nv_truth",
+        )
+
+        if inner is not None:
+            return condition_int_ranges(
+                inner,
+                mapping,
+                symbols,
+                truth,
+            )
+
+        inner = unwrap(
+            expr,
+            "nv_not",
+        )
+
+        if inner is not None:
+            return condition_int_ranges(
+                inner,
+                mapping,
+                symbols,
+                not truth,
+            )
+
+        def merge_ranges(left, right):
+            merged = {
+                name: list(bounds)
+                for name, bounds in left.items()
+            }
+
+            for name, (low, high) in right.items():
+                current = merged.setdefault(
+                    name,
+                    [None, None],
+                )
+
+                if low is not None:
+                    if (
+                        current[0] is None
+                        or low > current[0]
+                    ):
+                        current[0] = low
+
+                if high is not None:
+                    if (
+                        current[1] is None
+                        or high < current[1]
+                    ):
+                        current[1] = high
+
+            return {
+                name: tuple(bounds)
+                for name, bounds in merged.items()
+            }
+
+        inner = unwrap(
+            expr,
+            "nv_and",
+        )
+
+        if inner is not None:
+            args = split_args(inner)
+
+            if len(args) != 2:
+                return {}
+
+            if not truth:
+                return {}
+
+            return merge_ranges(
+                condition_int_ranges(
+                    args[0],
+                    mapping,
+                    symbols,
+                    True,
+                ),
+                condition_int_ranges(
+                    args[1],
+                    mapping,
+                    symbols,
+                    True,
+                ),
+            )
+
+        inner = unwrap(
+            expr,
+            "nv_or",
+        )
+
+        if inner is not None:
+            args = split_args(inner)
+
+            if len(args) != 2:
+                return {}
+
+            if truth:
+                return {}
+
+            return merge_ranges(
+                condition_int_ranges(
+                    args[0],
+                    mapping,
+                    symbols,
+                    False,
+                ),
+                condition_int_ranges(
+                    args[1],
+                    mapping,
+                    symbols,
+                    False,
+                ),
+            )
+
+        comparisons = {
+            "nv_lt": "lt",
+            "nv_le": "le",
+            "nv_gt": "gt",
+            "nv_ge": "ge",
+            "nv_eq": "eq",
+            "nv_ne": "ne",
+        }
+
+        for fn, op in comparisons.items():
+            inner = unwrap(
+                expr,
+                fn,
+            )
+
+            if inner is None:
+                continue
+
+            args = split_args(inner)
+
+            if len(args) != 2:
+                return {}
+
+            left = strip_outer_parens(
+                args[0]
+            )
+            right = strip_outer_parens(
+                args[1]
+            )
+
+            left_name = (
+                left
+                if re.fullmatch(
+                    r'[A-Za-z_][A-Za-z0-9_]*',
+                    left,
+                )
+                else None
+            )
+            right_name = (
+                right
+                if re.fullmatch(
+                    r'[A-Za-z_][A-Za-z0-9_]*',
+                    right,
+                )
+                else None
+            )
+
+            right_value = parse_guard_int_literal(
+                right
+            )
+            left_value = parse_guard_int_literal(
+                left
+            )
+
+            if (
+                left_name is not None
+                and right_value is not None
+            ):
+                source_name = left_name
+                value = right_value
+                normalized_op = op
+            elif (
+                right_name is not None
+                and left_value is not None
+            ):
+                source_name = right_name
+                value = left_value
+                normalized_op = {
+                    "lt": "gt",
+                    "le": "ge",
+                    "gt": "lt",
+                    "ge": "le",
+                    "eq": "eq",
+                    "ne": "ne",
+                }[op]
+            else:
+                return {}
+
+            c_name = mapping.get(
+                source_name,
+                source_name,
+            )
+
+            if symbols.get(c_name) != "int":
+                return {}
+
+            if not truth:
+                normalized_op = {
+                    "lt": "ge",
+                    "le": "gt",
+                    "gt": "le",
+                    "ge": "lt",
+                    "eq": "ne",
+                    "ne": "eq",
+                }[normalized_op]
+
+            if normalized_op == "lt":
+                return {
+                    c_name: (
+                        None,
+                        value - 1,
+                    )
+                }
+
+            if normalized_op == "le":
+                return {
+                    c_name: (
+                        None,
+                        value,
+                    )
+                }
+
+            if normalized_op == "gt":
+                return {
+                    c_name: (
+                        value + 1,
+                        None,
+                    )
+                }
+
+            if normalized_op == "ge":
+                return {
+                    c_name: (
+                        value,
+                        None,
+                    )
+                }
+
+            if normalized_op == "eq":
+                return {
+                    c_name: (
+                        value,
+                        value,
+                    )
+                }
+
+            return {}
+
+        return {}
+
+    def exact_int_names_from_condition(
+        expr,
+        mapping,
+        symbols,
+        truth=True,
+    ):
+        ranges = condition_int_ranges(
+            expr,
+            mapping,
+            symbols,
+            truth,
+        )
+
+        result = set()
+
+        for name, (low, high) in ranges.items():
+            if (
+                low is not None
+                and high is not None
+                and low >= -SAFE_DOUBLE_INT
+                and high <= SAFE_DOUBLE_INT
+            ):
+                result.add(name)
+
+        return result
 
     def make_version_name(
         source_name,
@@ -4400,9 +4769,10 @@ def build_native_branch_flow_helper(
 
         # Une conversion int -> float est sûre à l'entrée du
         # while seulement si la valeur entière courante est
-        # exactement représentable en double. Sans cette preuve,
-        # garder le chemin dynamique évite de modifier la valeur
-        # lors d'un while à zéro itération.
+        # prouvée dans la plage conservative de promotion. Sans
+        # cette preuve, garder le chemin dynamique préserve la
+        # valeur ET sa représentation observable lors d'un while
+        # à zéro itération.
         for name in ordered_names:
             if (
                 pre_types[name] == "int"
@@ -4756,6 +5126,7 @@ def build_native_branch_flow_helper(
             return None
 
         staged = []
+        prior_conditions = []
 
         for branch in branches:
             raw_condition = branch.get(
@@ -4774,6 +5145,44 @@ def build_native_branch_flow_helper(
                 if lowered_condition is None:
                     return None
 
+            # Les faits de plage sont valables uniquement dans
+            # cette branche. On les ajoute temporairement à la
+            # provenance d'entiers exactement convertibles puis
+            # on restaure l'état global après compilation.
+            exact_before_branch = set(
+                float_exact_int_names
+            )
+
+            branch_exact = set()
+
+            # Pour une branche conditionnelle, toutes les
+            # conditions précédentes sont fausses et la condition
+            # courante est vraie. Pour le else, toutes les
+            # conditions précédentes sont fausses.
+            for previous in prior_conditions:
+                branch_exact.update(
+                    exact_int_names_from_condition(
+                        previous,
+                        pre_names,
+                        pre_symbols,
+                        False,
+                    )
+                )
+
+            if raw_condition is not None:
+                branch_exact.update(
+                    exact_int_names_from_condition(
+                        raw_condition,
+                        pre_names,
+                        pre_symbols,
+                        True,
+                    )
+                )
+
+            float_exact_int_names.update(
+                branch_exact
+            )
+
             compiled = compile_operations(
                 branch.get(
                     "operations",
@@ -4786,6 +5195,10 @@ def build_native_branch_flow_helper(
             )
 
             if compiled is None:
+                float_exact_int_names.clear()
+                float_exact_int_names.update(
+                    exact_before_branch
+                )
                 return None
 
             (
@@ -4796,6 +5209,15 @@ def build_native_branch_flow_helper(
                 branch_falls_through,
             ) = compiled
 
+            branch_exact_names = set(
+                float_exact_int_names
+            )
+
+            float_exact_int_names.clear()
+            float_exact_int_names.update(
+                exact_before_branch
+            )
+
             staged.append({
                 "condition": lowered_condition,
                 "lines": branch_lines,
@@ -4803,7 +5225,13 @@ def build_native_branch_flow_helper(
                 "types": final_types,
                 "symbols": branch_symbols,
                 "falls_through": branch_falls_through,
+                "exact_names": branch_exact_names,
             })
+
+            if raw_condition is not None:
+                prior_conditions.append(
+                    raw_condition
+                )
 
         continuing = [
             branch
@@ -4914,7 +5342,10 @@ def build_native_branch_flow_helper(
                 joined_type == "int"
                 and all(
                     branch["names"].get(name)
-                    in float_exact_int_names
+                    in branch.get(
+                        "exact_names",
+                        (),
+                    )
                     for branch in continuing
                 )
             ):
@@ -5008,6 +5439,52 @@ def build_native_branch_flow_helper(
             output_symbols[
                 join["name"]
             ] = join["type"]
+
+        # Si certaines branches terminent par return, les faits
+        # de plage communs à tous les chemins qui continuent
+        # restent vrais après le if. Cela permet notamment une
+        # garde de plage suivie d'un while.
+        if continuing:
+            for source_name, c_name in output_names.items():
+                if source_name in joined:
+                    continue
+
+                if all(
+                    branch["names"].get(
+                        source_name
+                    )
+                    in branch.get(
+                        "exact_names",
+                        (),
+                    )
+                    for branch in continuing
+                ):
+                    float_exact_int_names.add(
+                        c_name
+                    )
+
+            # Les paramètres ne figurent pas dans output_names.
+            # Conserver également les faits communs portant sur
+            # leurs identifiants C.
+            common_exact = None
+
+            for branch in continuing:
+                branch_exact = set(
+                    branch.get(
+                        "exact_names",
+                        (),
+                    )
+                )
+
+                if common_exact is None:
+                    common_exact = branch_exact
+                else:
+                    common_exact &= branch_exact
+
+            if common_exact:
+                float_exact_int_names.update(
+                    common_exact
+                )
 
         return (
             result_lines,

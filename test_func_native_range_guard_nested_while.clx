@@ -1,0 +1,15 @@
+fn range_guard_nested_while(n: int) -> float:
+    result = 0.0
+    value = 0
+    if n >= -999999 and n <= 999999:
+        value = n
+        while value < 10:
+            value = value + 0.5
+        result = value
+    else:
+        result = 0.0
+    return result
+
+print(range_guard_nested_while(2))
+print(range_guard_nested_while(12))
+print(range_guard_nested_while(1000000))

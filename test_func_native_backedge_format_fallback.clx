@@ -1,0 +1,10 @@
+fn backedge_format(n: int) -> float:
+    value = 1000000
+    i = 0
+    while i < n:
+        value = value + 0.5
+        i = i + 1
+    return value
+
+print(backedge_format(0))
+print(backedge_format(1))

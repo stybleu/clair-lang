@@ -1,0 +1,15 @@
+fn range_guard_safe(n: int) -> float:
+    value = 0
+    if n >= -999999 and n <= 999999:
+        value = n
+    else:
+        return 0.0
+    i = 0
+    while i < 2:
+        value = value + 0.5
+        i = i + 1
+    return value
+
+print(range_guard_safe(2))
+print(range_guard_safe(-2))
+print(range_guard_safe(1000000))

@@ -1,0 +1,14 @@
+fn range_guard_format(n: int) -> float:
+    value = 0
+    if n >= -1000000 and n <= 1000000:
+        value = n
+    else:
+        return 0.0
+    i = 0
+    while i < 0:
+        value = value + 0.5
+        i = i + 1
+    return value
+
+print(range_guard_format(1000000))
+print(range_guard_format(-1000000))
