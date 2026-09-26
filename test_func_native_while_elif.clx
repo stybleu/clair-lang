@@ -1,0 +1,17 @@
+fn classify_sum(n: int) -> int:
+    total = 0
+    i = 0
+
+    while i < n:
+        if i % 3 == 0:
+            total = total + 10
+        elif i % 3 == 1:
+            total = total + 2
+        else:
+            total = total + 1
+
+        i = i + 1
+
+    return total
+
+print(classify_sum(6))

@@ -1,0 +1,12 @@
+fn branch_existing_widen(n: int) -> float:
+    value = 1
+
+    if n > 0:
+        value = 2.5
+    else:
+        value = 3
+
+    return value
+
+print(branch_existing_widen(1))
+print(branch_existing_widen(-1))

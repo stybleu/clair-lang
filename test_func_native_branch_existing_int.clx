@@ -1,0 +1,12 @@
+fn branch_existing_int(n: int) -> int:
+    value = 1
+
+    if n > 0:
+        value = value + 10
+    else:
+        value = value + 20
+
+    return value
+
+print(branch_existing_int(1))
+print(branch_existing_int(-1))

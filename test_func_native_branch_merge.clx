@@ -1,0 +1,10 @@
+fn branch_merge(n: int) -> int:
+    if n > 0:
+        value = 10
+    else:
+        value = 20
+
+    return value
+
+print(branch_merge(10))
+print(branch_merge(-1))

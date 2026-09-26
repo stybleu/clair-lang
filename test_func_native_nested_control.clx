@@ -1,0 +1,24 @@
+fn nested_control(n: int) -> int:
+    total = 0
+    i = 0
+
+    while i < n:
+        i = i + 1
+
+        if i < 9:
+            if i < 6:
+                if i == 2:
+                    continue
+                elif i == 5:
+                    total = total + 50
+                else:
+                    total = total + i
+            else:
+                if i == 8:
+                    break
+                else:
+                    total = total + 10
+
+    return total
+
+print(nested_control(20))

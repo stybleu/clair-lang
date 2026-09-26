@@ -1,0 +1,13 @@
+fn version_carry(n: int) -> float:
+    value = 10
+    other = 1
+
+    if n > 0:
+        value = 2.5
+    else:
+        other = other + 1
+
+    return value + other
+
+print(version_carry(1))
+print(version_carry(-1))

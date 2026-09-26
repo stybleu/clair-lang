@@ -1,0 +1,12 @@
+fn promoted_return(n: int) -> float:
+    i = 0
+
+    while i < n:
+        i = i + 1
+
+        if i == 2:
+            return 2
+
+    return 9.5
+
+print(promoted_return(5))

@@ -1,0 +1,12 @@
+fn multi_join(n: int) -> float:
+    if n > 0:
+        a = 10
+        b = 1.5
+    else:
+        a = 20
+        b = 2.5
+
+    return a + b
+
+print(multi_join(1))
+print(multi_join(-1))

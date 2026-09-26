@@ -1,0 +1,12 @@
+fn accumulate(x: float, count: int) -> float:
+    i = 0
+
+    while i < count:
+        x = x + 1.0
+        i = i + 1
+
+    return x
+
+result = accumulate(5.0, 1000)
+
+print(result)

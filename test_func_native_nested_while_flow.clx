@@ -1,0 +1,23 @@
+fn nested_flow(n: int) -> int:
+    total = 0
+    i = 0
+    j = 0
+
+    while i < n:
+        i = i + 1
+        j = 0
+
+        while j < i:
+            j = j + 1
+
+            if j == 2:
+                continue
+
+            if j == 4:
+                break
+
+            total = total + j
+
+    return total
+
+print(nested_flow(4))

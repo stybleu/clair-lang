@@ -1,0 +1,16 @@
+fn loop_local(n: int) -> int:
+    total = 0
+    i = 0
+
+    while i < n:
+        i = i + 1
+
+        j = 0
+
+        while j < i:
+            j = j + 1
+            total = total + j
+
+    return total
+
+print(loop_local(4))

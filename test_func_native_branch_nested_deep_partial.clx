@@ -1,0 +1,15 @@
+fn nested_deep_partial(n: int) -> int:
+    if n > 0:
+        if n > 10:
+            if n > 20:
+                value = 100
+            else:
+                other = 50
+        else:
+            value = 30
+    else:
+        value = 20
+
+    return value
+
+print(nested_deep_partial(30))

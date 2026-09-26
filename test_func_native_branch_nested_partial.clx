@@ -1,0 +1,12 @@
+fn nested_partial(n: int) -> int:
+    if n > 0:
+        if n > 10:
+            value = 100
+        else:
+            other = 50
+    else:
+        value = 20
+
+    return value
+
+print(nested_partial(20))

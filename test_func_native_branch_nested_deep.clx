@@ -1,0 +1,20 @@
+fn nested_deep(n: int) -> float:
+    value = 1
+
+    if n > 0:
+        if n > 10:
+            if n > 20:
+                value = 30.5
+            else:
+                value = 20
+        else:
+            value = 10.5
+    else:
+        value = 5
+
+    return value
+
+print(nested_deep(30))
+print(nested_deep(15))
+print(nested_deep(5))
+print(nested_deep(-1))

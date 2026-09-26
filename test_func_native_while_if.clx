@@ -1,0 +1,13 @@
+fn sum_even(n: int) -> int:
+    total = 0
+    i = 0
+
+    while i < n:
+        if i % 2 == 0:
+            total = total + i
+
+        i = i + 1
+
+    return total
+
+print(sum_even(10))

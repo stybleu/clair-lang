@@ -1,0 +1,16 @@
+fn while_in_if(n: int) -> int:
+    value = 0
+
+    if n > 0:
+        i = 0
+
+        while i < n:
+            value = value + 2
+            i = i + 1
+    else:
+        value = 10
+
+    return value
+
+print(while_in_if(3))
+print(while_in_if(-1))

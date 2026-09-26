@@ -1,0 +1,12 @@
+fn early_return(n: int) -> int:
+    i = 0
+
+    while i < n:
+        i = i + 1
+
+        if i == 3:
+            return 30
+
+    return 99
+
+print(early_return(10))

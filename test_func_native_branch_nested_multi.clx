@@ -1,0 +1,20 @@
+fn nested_multi(n: int) -> float:
+    a = 1
+    b = 2
+
+    if n > 0:
+        if n > 5:
+            a = 10.5
+            b = 20
+        else:
+            a = 5
+            b = 7.5
+    else:
+        a = 2
+        b = 3
+
+    return a + b
+
+print(nested_multi(10))
+print(nested_multi(3))
+print(nested_multi(-1))

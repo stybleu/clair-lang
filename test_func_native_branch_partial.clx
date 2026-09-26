@@ -1,0 +1,9 @@
+fn branch_partial(n: int) -> int:
+    if n > 0:
+        value = 10
+    else:
+        other = 20
+
+    return value
+
+print(branch_partial(1))

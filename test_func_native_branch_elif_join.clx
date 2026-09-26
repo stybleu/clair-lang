@@ -1,0 +1,13 @@
+fn elif_join(n: int) -> int:
+    if n < 0:
+        value = 10
+    elif n == 0:
+        value = 20
+    else:
+        value = 30
+
+    return value
+
+print(elif_join(-1))
+print(elif_join(0))
+print(elif_join(1))

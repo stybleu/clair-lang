@@ -1,0 +1,15 @@
+fn if_in_while(n: int) -> int:
+    value = 0
+    i = 0
+
+    while i < n:
+        i = i + 1
+
+        if i % 2 == 0:
+            value = value + 2
+        else:
+            value = value + 1
+
+    return value
+
+print(if_in_while(5))

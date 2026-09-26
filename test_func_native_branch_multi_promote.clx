@@ -1,0 +1,12 @@
+fn multi_promote(n: int) -> float:
+    if n > 0:
+        a = 10
+        b = 1.5
+    else:
+        a = 20.5
+        b = 2
+
+    return a + b
+
+print(multi_promote(1))
+print(multi_promote(-1))

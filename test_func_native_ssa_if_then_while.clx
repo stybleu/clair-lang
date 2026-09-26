@@ -1,0 +1,18 @@
+fn if_then_while(n: int) -> float:
+    value = 1
+
+    if n > 5:
+        value = 2.5
+    else:
+        value = 3
+
+    i = 0
+
+    while i < n:
+        value = value + 1
+        i = i + 1
+
+    return value
+
+print(if_then_while(3))
+print(if_then_while(10))

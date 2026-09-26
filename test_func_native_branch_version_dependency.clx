@@ -1,0 +1,15 @@
+fn version_dependency(n: int) -> float:
+    a = 1
+    b = 2
+
+    if n > 0:
+        a = a + 1.5
+        b = a + b
+    else:
+        a = a + 2
+        b = a + b
+
+    return a + b
+
+print(version_dependency(1))
+print(version_dependency(-1))

@@ -1,0 +1,10 @@
+fn branch_promote(n: int) -> float:
+    if n > 0:
+        value = 10
+    else:
+        value = 20.5
+
+    return value
+
+print(branch_promote(1))
+print(branch_promote(-1))

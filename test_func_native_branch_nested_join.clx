@@ -1,0 +1,16 @@
+fn nested_join(n: int) -> float:
+    value = 1
+
+    if n > 0:
+        if n > 10:
+            value = 20.5
+        else:
+            value = 10
+    else:
+        value = 5
+
+    return value
+
+print(nested_join(20))
+print(nested_join(5))
+print(nested_join(-1))
