@@ -157,3 +157,21 @@ __pycache__/
 /bench_liste_native
 /bench_polymorphe
 /bench_polymorphe_c
+
+# === Local development diagnostics ===
+
+# Compiler/test logs
+*.log
+
+# Optimizer backups kept locally
+/outils/*.backup_*
+/outils/*.backup-*
+/outils/*.backup
+
+# Assembly / compiler inspection dumps
+/assembly_*.txt
+/main_*.txt
+
+# Python temporary analysis files
+*.tmp
+*.temp
